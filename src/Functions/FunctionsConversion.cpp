@@ -426,7 +426,8 @@ FunctionCast::WrapperType FunctionCast::createWrapper(const DataTypePtr & from_t
     TypeIndex to_type_index = to_type->getTypeId();
     WhichDataType to(to_type_index);
     bool can_apply_accurate_cast = (cast_type == CastType::accurate || cast_type == CastType::accurateOrNull)
-        && (which.isInt() || which.isUInt() || which.isFloat());
+        && (which.isInt() || which.isUInt() || which.isFloat()
+            || (which.isDecimal() && (to.isInt() || to.isUInt())));
     can_apply_accurate_cast |= cast_type == CastType::accurate && which.isStringOrFixedString() && to.isNativeInteger();
 
     if (requested_result_is_nullable && checkAndGetDataType<DataTypeString>(from_type.get()))
@@ -472,9 +473,9 @@ FunctionCast::WrapperType FunctionCast::createWrapper(const DataTypePtr & from_t
             using LeftDataType = typename Types::LeftType;
             using RightDataType = typename Types::RightType;
 
-            if constexpr (IsDataTypeNumber<LeftDataType>)
+            if constexpr (IsDataTypeDecimalOrNumber<LeftDataType>)
             {
-                if constexpr (IsDataTypeDateOrDateTimeOrTime<RightDataType>)
+                if constexpr (IsDataTypeNumber<LeftDataType> && IsDataTypeDateOrDateTimeOrTime<RightDataType>)
                 {
 #define GENERATE_OVERFLOW_MODE_CASE(OVERFLOW_MODE, ADDITIONS) \
 case FormatSettings::DateTimeOverflowBehavior::OVERFLOW_MODE: \
