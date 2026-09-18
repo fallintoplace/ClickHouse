@@ -8,7 +8,6 @@
 #include <Core/Field.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteBufferFromString.h>
-#include <IO/VarInt.h>
 
 #include <limits>
 
@@ -223,7 +222,12 @@ GTEST_TEST(Settings, LegacyBinaryFormatRejectsZeroForANonZeroSetting)
     {
         WriteBufferFromOwnString out;
         BaseSettingsHelpers::writeString("grace_hash_join_initial_buckets", out);
-        writeVarUInt(value, out);
+        while (value > 0x7F)
+        {
+            out.write(static_cast<char>(0x80 | (value & 0x7F)));
+            value >>= 7;
+        }
+        out.write(static_cast<char>(value));
         BaseSettingsHelpers::writeString("", out); /// end of settings
         return out.str();
     };
