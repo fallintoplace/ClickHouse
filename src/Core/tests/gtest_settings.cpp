@@ -8,7 +8,6 @@
 #include <Core/Field.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteBufferFromString.h>
-#include <IO/VarInt.h>
 
 #include <limits>
 
