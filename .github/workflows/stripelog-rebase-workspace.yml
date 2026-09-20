@@ -1,0 +1,92 @@
+name: StripeLog rebase workspace
+on:
+  push:
+    branches: [work/stripelog-rebase-115907-20260920]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.repository == 'fallintoplace/ClickHouse'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Export pinned sources and inspect the rebase
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BASE=d469feea5f342065ffe8b2384d4ddf354dae3978
+          export HEAD_SHA=ed5932436d9b72e480b5e034874aa321b9088d57
+          export UPSTREAM=8f98f40e85a21922f3f15690e97749bb442b65dc
+          mkdir source export
+          cd source
+          git init -q
+          git config user.name 'Minh Vu'
+          git config user.email 'vuhoangminh97@gmail.com'
+          git remote add origin https://github.com/fallintoplace/ClickHouse.git
+          git config remote.origin.promisor true
+          git config remote.origin.partialclonefilter blob:none
+          git fetch --no-tags --filter=blob:none --depth=64 origin "$HEAD_SHA"
+          git fetch --no-tags --filter=blob:none --depth=1 origin "$UPSTREAM"
+          git format-patch --no-signature --full-index --binary -o ../export/patches "$BASE..$HEAD_SHA"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          out = pathlib.Path('../export')
+          paths = set(git('log', '--format=', '--name-only', os.environ['BASE']+'..'+os.environ['HEAD_SHA']).decode().splitlines())
+          paths.discard('')
+          paths.update(['src/Storages/StorageMaterializedView.h', 'src/Storages/StorageMaterializedView.cpp', 'src/Storages/StorageSnapshot.h', 'src/Storages/StorageSnapshot.cpp', 'src/Planner/PlannerTableExpressionData.h', 'src/Planner/PlannerTableExpressionData.cpp', 'src/Planner/PlannerContext.h', 'src/Planner/PlannerContext.cpp', 'src/Interpreters/TreeRewriter.h', 'src/Interpreters/getHeaderForProcessingStage.cpp', 'src/Interpreters/ActionsDAG.h', 'src/Interpreters/SelectQueryInfo.h', 'src/Storages/StorageWithCommonVirtualColumns.h', 'src/Storages/ColumnsDescription.h', 'src/Processors/QueryPlan/ReadFromStorageStep.cpp'])
+          (out/'paths.txt').write_text('\n'.join(sorted(paths))+'\n')
+          manifest = {}
+          for label, key in [('base','BASE'), ('head','HEAD_SHA'), ('master','UPSTREAM')]:
+              sha = os.environ[key]
+              manifest[label] = {'commit': sha, 'tree': git('show','-s','--format=%T',sha).decode().strip(), 'files': {}}
+              for path in sorted(paths):
+                  entry = git('ls-tree',sha,'--',path).decode().strip()
+                  if not entry:
+                      continue
+                  info, _ = entry.split('\t',1)
+                  mode, kind, blob = info.split()
+                  if kind != 'blob':
+                      continue
+                  dest = out/label/path
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  dest.write_bytes(git('show', sha+':'+path))
+                  manifest[label]['files'][path] = {'sha':blob,'mode':mode}
+          commits = git('rev-list','--reverse',os.environ['BASE']+'..'+os.environ['HEAD_SHA']).decode().splitlines()
+          manifest['commits'] = []
+          for sha in commits:
+              manifest['commits'].append({'sha':sha,'raw':git('cat-file','commit',sha).decode()})
+          (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
+          PY
+          git sparse-checkout init --no-cone
+          sed 's|^|/|' ../export/paths.txt | git sparse-checkout set --no-cone --stdin
+          git checkout --detach "$HEAD_SHA"
+          set +e
+          git rebase --onto "$UPSTREAM" "$BASE" > ../export/rebase.log 2>&1
+          result=$?
+          set -e
+          echo "$result" > ../export/rebase.exit
+          git status --porcelain=v1 > ../export/rebase-status.txt
+          git diff --name-only --diff-filter=U > ../export/conflicts.txt
+          git diff > ../export/worktree.diff
+          git diff --cached > ../export/index.diff
+          git log --format='%H %s' -25 > ../export/rebase-history.txt
+          if [ -f .git/rebase-merge/stopped-sha ]; then
+            cp .git/rebase-merge/stopped-sha ../export/stopped-sha
+          fi
+          while IFS= read -r path; do
+            if [ -f "$path" ]; then
+              mkdir -p "../export/rebase-worktree/$(dirname "$path")"
+              cp "$path" "../export/rebase-worktree/$path"
+            fi
+          done < ../export/paths.txt
+          cd ..
+          tar -czf stripelog-rebase-workspace.tar.gz export
+          cat export/rebase.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stripelog-rebase-workspace
+          path: stripelog-rebase-workspace.tar.gz
+          retention-days: 3
+          if-no-files-found: error
