@@ -1,0 +1,71 @@
+<test>
+    <!--
+        Outer joins append long runs of defaults for unmatched rows. Exercise the
+        data-type bulk-default dispatch with both ordinary and Nullable outputs.
+    -->
+    <settings>
+        <max_threads>1</max_threads>
+        <max_block_size>65536</max_block_size>
+        <join_algorithm>partial_merge</join_algorithm>
+    </settings>
+
+    <substitutions>
+        <substitution>
+            <name>use_nulls</name>
+            <values>
+                <value>0</value>
+                <value>1</value>
+            </values>
+        </substitution>
+    </substitutions>
+
+    <create_query>
+        CREATE TABLE bulk_default_left
+        (
+            k UInt64
+        ) ENGINE = MergeTree ORDER BY k
+    </create_query>
+    <create_query>
+        CREATE TABLE bulk_default_right
+        (
+            k UInt64,
+            value_number UInt64,
+            value_string String,
+            value_array Array(UInt64)
+        ) ENGINE = MergeTree ORDER BY k
+    </create_query>
+
+    <fill_query>
+        INSERT INTO bulk_default_left
+        SELECT number FROM numbers(1048576)
+    </fill_query>
+    <fill_query>
+        INSERT INTO bulk_default_right
+        SELECT toUInt64(1048576), toUInt64(42), repeat('x', 64), range(16)
+    </fill_query>
+
+    <query>
+        SELECT r.value_number
+        FROM bulk_default_left AS l
+        ALL LEFT JOIN bulk_default_right AS r ON l.k = r.k
+        SETTINGS join_use_nulls = {use_nulls}
+        FORMAT Null
+    </query>
+    <query>
+        SELECT r.value_string
+        FROM bulk_default_left AS l
+        ALL LEFT JOIN bulk_default_right AS r ON l.k = r.k
+        SETTINGS join_use_nulls = {use_nulls}
+        FORMAT Null
+    </query>
+    <query>
+        SELECT r.value_array
+        FROM bulk_default_left AS l
+        ALL LEFT JOIN bulk_default_right AS r ON l.k = r.k
+        SETTINGS join_use_nulls = {use_nulls}
+        FORMAT Null
+    </query>
+
+    <drop_query>DROP TABLE IF EXISTS bulk_default_left</drop_query>
+    <drop_query>DROP TABLE IF EXISTS bulk_default_right</drop_query>
+</test>

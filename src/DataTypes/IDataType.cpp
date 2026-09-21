@@ -365,6 +365,15 @@ void IDataType::insertDefaultInto(IColumn & column) const
 
 void IDataType::insertManyDefaultsInto(IColumn & column, size_t n) const
 {
+    /// For trivial defaults, insertDefaultInto() is exactly column.insertDefault().
+    /// Let the column use its bulk implementation instead of repeating the scalar call.
+    if (isDefaultInsertTrivial())
+    {
+        column.insertManyDefaults(n);
+        return;
+    }
+
+    /// Keep type-aware defaults such as Enum on the data-type path.
     column.reserve(column.size() + n);
     for (size_t i = 0; i < n; ++i)
         insertDefaultInto(column);

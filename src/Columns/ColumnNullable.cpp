@@ -332,6 +332,37 @@ void ColumnNullable::insertManyFromNotNullable(const IColumn & src, size_t posit
         insertFromNotNullable(src, position);
 }
 
+void ColumnNullable::insertManyDefaults(size_t length)
+{
+    if (length == 0)
+        return;
+
+    auto & null_map_data = getNullMapData();
+    const size_t old_size = null_map_data.size();
+    const size_t new_size = old_size + length;
+
+    /// Reserve first so the null-map append cannot fail after the nested column starts changing.
+    null_map_data.reserve(new_size);
+
+    try
+    {
+        getNestedColumn().insertManyDefaults(length);
+    }
+    catch (...)
+    {
+        /// IColumn::insertManyDefaults may make partial progress before an exception. Mirror that
+        /// progress in the null map, matching repeated insertDefault() semantics while preserving
+        /// ColumnNullable's size invariant.
+        const size_t nested_size = getNestedColumn().size();
+        chassert(nested_size >= old_size && nested_size <= new_size);
+        if (nested_size >= old_size && nested_size <= new_size)
+            null_map_data.resize_fill(nested_size, IS_NULL_MASK);
+        throw;
+    }
+
+    null_map_data.resize_fill(new_size, IS_NULL_MASK);
+}
+
 void ColumnNullable::popBack(size_t n)
 {
     getNestedColumn().popBack(n);

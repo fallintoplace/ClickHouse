@@ -42,6 +42,8 @@ public:
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Method insertDefaultInto is not implemented for data type {}", getName());
     }
 
+    bool isDefaultInsertTrivial() const override { return false; }
+
     bool haveSubtypes() const override { return false; }
     bool cannotBeStoredInTables() const override { return true; }
 
