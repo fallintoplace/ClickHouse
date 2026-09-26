@@ -22,6 +22,7 @@
 #include <Interpreters/ExpressionActions.h>
 
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 
 
@@ -529,7 +530,8 @@ MergeTreeReadTaskColumns getReadTaskColumns(
             return false;
 
         auto column_in_storage = storage_snapshot->tryGetColumn(options, name);
-        if (!column_in_storage || !column_in_storage->isSubcolumn())
+        if (!column_in_storage || !column_in_storage->isSubcolumn()
+            || column_in_storage->type->getTypeId() != TypeIndex::UInt64)
             return false;
 
         parent_name = name.substr(0, name.size() - string_size_suffix_length);
@@ -566,66 +568,53 @@ MergeTreeReadTaskColumns getReadTaskColumns(
         return true;
     };
 
-    Names legacy_string_parents;
-    NameSet seen_legacy_string_parents;
-    auto collectLegacyStringParents = [&](const Names & names)
+    std::unordered_map<String, String> legacy_string_companions;
+    auto collectLegacyStringCompanions = [&](const Names & names)
     {
         for (const auto & name : names)
         {
             String parent_name;
-            if (tryGetLegacyStringParent(name, parent_name) && seen_legacy_string_parents.emplace(parent_name).second)
-                legacy_string_parents.push_back(std::move(parent_name));
+            if (legacy_string_companions.contains(name) || !tryGetLegacyStringParent(name, parent_name))
+                continue;
+
+            auto needs_parent = [&](const Names & columns)
+            {
+                return std::find(columns.begin(), columns.end(), parent_name) != columns.end();
+            };
+
+            if (needs_parent(column_to_read_after_prewhere)
+                || std::any_of(required_source_columns_by_step.begin(), required_source_columns_by_step.end(), needs_parent))
+            {
+                legacy_string_companions.emplace(name, parent_name);
+                legacy_string_companions.emplace(parent_name, name);
+            }
         }
     };
 
     for (const auto & names : required_source_columns_by_step)
-        collectLegacyStringParents(names);
-    collectLegacyStringParents(column_to_read_after_prewhere);
+        collectLegacyStringCompanions(names);
+    collectLegacyStringCompanions(column_to_read_after_prewhere);
 
-    auto containsName = [](const Names & names, const String & name)
+    /// A legacy String and its virtual size share one stream. Request both at the earliest
+    /// use of either; columns_from_previous_steps then prevents later readers from rereading it.
+    /// Pairing step inputs also covers later PREWHERE consumers without changing action order.
+    for (auto & names : required_source_columns_by_step)
     {
-        return std::find(names.begin(), names.end(), name) != names.end();
-    };
+        if (legacy_string_companions.empty())
+            break;
 
-    /// A legacy String .size is virtual and scans the regular String stream. PREWHERE and
-    /// the main read use separate MergeTree readers, so reading the parent and .size in
-    /// different readers would scan the same data twice. Co-read both names in the earliest
-    /// step that needs either one. The existing columns_from_previous_steps handling then
-    /// removes the second physical read while preserving expression evaluation order.
-    for (const auto & parent_name : legacy_string_parents)
-    {
-        const String size_name = parent_name + ".size";
-        bool parent_is_required = false;
-        bool size_is_required = false;
-        size_t first_step = required_source_columns_by_step.size();
-
-        for (size_t i = 0; i < required_source_columns_by_step.size(); ++i)
+        const size_t original_size = names.size();
+        for (size_t i = 0; i < original_size; ++i)
         {
-            const auto & names = required_source_columns_by_step[i];
-            const bool has_parent = containsName(names, parent_name);
-            const bool has_size = containsName(names, size_name);
-            parent_is_required |= has_parent;
-            size_is_required |= has_size;
-            if ((has_parent || has_size) && first_step == required_source_columns_by_step.size())
-                first_step = i;
+            auto it = legacy_string_companions.find(names[i]);
+            if (it == legacy_string_companions.end())
+                continue;
+
+            if (std::find(names.begin(), names.end(), it->second) == names.end())
+                names.push_back(it->second);
+            legacy_string_companions.erase(it->second);
+            legacy_string_companions.erase(it);
         }
-
-        const bool parent_is_required_after_prewhere = containsName(column_to_read_after_prewhere, parent_name);
-        const bool size_is_required_after_prewhere = containsName(column_to_read_after_prewhere, size_name);
-        parent_is_required |= parent_is_required_after_prewhere;
-        size_is_required |= size_is_required_after_prewhere;
-        if ((parent_is_required_after_prewhere || size_is_required_after_prewhere)
-            && first_step == required_source_columns_by_step.size())
-            first_step = required_source_columns_by_step.size();
-
-        if (!parent_is_required || !size_is_required || first_step == required_source_columns_by_step.size())
-            continue;
-
-        auto & first_step_names = required_source_columns_by_step[first_step];
-        if (!containsName(first_step_names, parent_name))
-            first_step_names.push_back(parent_name);
-        if (!containsName(first_step_names, size_name))
-            first_step_names.push_back(size_name);
     }
 
     auto add_step = [&](const PrewhereExprStep & step, const Names & required_source_columns)
