@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-
-function test_variant {
-    # $_ in the template is replaced with every function name.
-    $CLICKHOUSE_CLIENT --param_template="$1" -q "SELECT replaceAll({template:String}, '\$_', name) FROM system.functions ORDER BY name FORMAT TSVRaw" | $CLICKHOUSE_CLIENT --calculate_text_stack_trace=0 --compile_expressions=0 --compile_aggregate_expressions=0 -n --ignore-error >/dev/null 2>&1
-    $CLICKHOUSE_CLIENT -q "SELECT 'Still alive'"
-}
-
-# vi: ft=bash

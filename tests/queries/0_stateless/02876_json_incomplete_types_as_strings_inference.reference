@@ -1,7 +1,0 @@
-a	Nullable(String)					
-b	Nullable(String)					
-c	Array(Nullable(String))					
-\N	{}	[]
-a	Nullable(Tuple(b Nullable(String), c Array(Array(Nullable(String)))))					
-d	Nullable(Tuple(e Array(Nullable(String)), f Nullable(String)))					
-(NULL,[[],[]])	(['{}','{}'],NULL)
