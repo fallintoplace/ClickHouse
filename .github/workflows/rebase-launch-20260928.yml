@@ -14,17 +14,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Execute the fixed maintenance worker from this exact commit
+      - name: Prepare validated commits without modifying PR heads
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           python3 -u - <<'PY'
           import os
+          import textwrap
           import urllib.request
           sha = os.environ['GITHUB_SHA']
           url = 'https://raw.githubusercontent.com/fallintoplace/ClickHouse/' + sha + '/.github/rebase-worker.py'
           with urllib.request.urlopen(url, timeout=45) as response:
               worker = response.read().decode()
+          start = "            backup = 'maintenance/rebase-backups/'"
+          stop = "            record(item)\n        except subprocess.TimeoutExpired"
+          assert worker.count(start) == 1 and worker.count(stop) == 1
+          left = worker.index(start)
+          right = worker.index(stop, left)
+          stage_code = '''stage = 'maintenance/rebase-stage-20260928'
+          git('fetch', '--no-tags', '--filter=blob:none', 'origin', 'refs/heads/' + stage)
+          previous_stage = out('rev-parse', 'FETCH_HEAD')
+          stage_tree = out('rev-parse', PIN + '^{tree}')
+          staged = out('commit-tree', stage_tree, '-p', previous_stage, '-p', new, '-m', 'Stage validated rebase for PR #' + str(n))
+          git('push', '--force-with-lease=refs/heads/' + stage + ':' + previous_stage, 'origin', staged + ':refs/heads/' + stage)
+          item.update(status='ready_to_publish', new=new, stage_commit=staged)
+          '''
+          worker = worker[:left] + textwrap.indent(textwrap.dedent(stage_code), '            ') + worker[right:]
+          assert "backup = 'maintenance/rebase-backups/'" not in worker
+          assert "new + ':refs/heads/' + branch" not in worker
           exec(compile(worker, 'rebase-worker.py', 'exec'), {'__name__': '__main__'})
           PY
