@@ -7,12 +7,12 @@ permissions:
   contents: write
 concurrency:
   group: clickhouse-open-pr-rebase-20260928
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   rebase:
     if: github.repository == 'fallintoplace/ClickHouse'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Execute the fixed maintenance worker from this exact commit
         env:
@@ -21,17 +21,10 @@ jobs:
         run: |
           python3 -u - <<'PY'
           import os
-          import textwrap
           import urllib.request
           sha = os.environ['GITHUB_SHA']
-          url = 'https://raw.githubusercontent.com/fallintoplace/ClickHouse/' + sha + '/.github/workflows/rebase-open-prs-20260928.yml'
+          url = 'https://raw.githubusercontent.com/fallintoplace/ClickHouse/' + sha + '/.github/rebase-worker.py'
           with urllib.request.urlopen(url, timeout=45) as response:
-              workflow = response.read().decode()
-          start = "          python3 -u - <<'PY'\n"
-          end = '          PY\n'
-          assert workflow.count(start) == 1
-          body = workflow.split(start, 1)[1]
-          assert body.endswith(end)
-          worker = textwrap.dedent(body[:-len(end)])
+              worker = response.read().decode()
           exec(compile(worker, 'rebase-worker.py', 'exec'), {'__name__': '__main__'})
           PY
