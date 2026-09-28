@@ -2,7 +2,6 @@
   "base": "2f953ee475f83d534261bbfdc91d26d789f6896c",
   "results": [],
   "validation": "git diff --check, exact added/deleted-line equivalence, Python AST/XML/shell syntax; no ClickHouse compilation or SQL execution",
-  "phase": "fetching_shallow_history",
-  "counts": {},
-  "eligible_count": 96
+  "phase": "discovering_pull_requests",
+  "counts": {}
 }
