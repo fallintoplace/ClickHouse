@@ -1,8 +1,0 @@
-native plain
-native secure
-http plain
-http secure
-TCP	0
-TCP	1
-HTTP	0
-HTTP	1
