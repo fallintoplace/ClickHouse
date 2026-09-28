@@ -1,8 +1,69 @@
 {
-  "base": "2f953ee475f83d534261bbfdc91d26d789f6896c",
-  "results": [],
-  "validation": "git diff --check, exact added/deleted-line equivalence, Python AST/XML/shell syntax; no ClickHouse compilation or SQL execution",
-  "phase": "fetching_shallow_history",
-  "counts": {},
-  "eligible_count": 96
+  "status": "partial_completion",
+  "repository": "ClickHouse/ClickHouse",
+  "author": "fallintoplace",
+  "date": "2026-09-28",
+  "initial_open_pr_count": 96,
+  "rebased_and_published_count": 2,
+  "remaining_prs_not_rebased_by_this_operation": 94,
+  "pinned_master": "2f953ee475f83d534261bbfdc91d26d789f6896c",
+  "master_note": "This is the master snapshot captured at the start, not a claim that master has stopped advancing.",
+  "completed": [
+    {
+      "pr": 119710,
+      "title": "Fix(String): Jaro similarity for empty strings",
+      "branch": "fix/jaro-empty-input",
+      "old": "b9cde089f7d3a5009cfba95b1f8f07915ca69d03",
+      "new": "b8856b609bc92168a56db7b80e9291f51a9dca78",
+      "backup": "maintenance/rebase-backups/20260928-manual/pr-119710",
+      "verified_open_and_mergeable_after_update": true,
+      "commits": 1,
+      "changed_files": 2,
+      "additions": 6,
+      "deletions": 9,
+      "ci_at_last_check": "PR workflow 36366609618 in progress"
+    },
+    {
+      "pr": 121644,
+      "title": "Perf(Array): Add wide integer fast paths to arrayReverse",
+      "branch": "perf/array-reverse-wide-integers",
+      "old": "38e10d39954f944defce7349c92f2fa7c2504cde",
+      "new": "25142ce0d0260c3b5b744fa2b3679e929fd9d7f6",
+      "backup": "maintenance/rebase-backups/20260928/pr-121644",
+      "verified_open_and_mergeable_after_update": true,
+      "commits": 1,
+      "changed_files": 4,
+      "additions": 20,
+      "deletions": 4,
+      "ci_at_last_check": "No PR workflow run returned for the new SHA yet"
+    }
+  ],
+  "validation_of_published_rebases": [
+    "Verified the touched existing files on pinned master have exactly the original patch's base blob IDs.",
+    "Reused the original PR source and reference/benchmark blobs; new regression files retain the exact original text.",
+    "Verified each new commit is one commit ahead and zero behind pinned master, with exactly the original file statuses and diff statistics.",
+    "Preserved original commit messages and single-commit structure.",
+    "Created backup refs and checked PR state/head immediately before publishing via the connected GitHub app.",
+    "No ClickHouse compilation, stateless SQL execution, or full test suite was run for the published commits. CI is not claimed to pass."
+  ],
+  "unresolved_rebase_conflicts": [
+    {"pr": 121377, "files": ["src/Core/Settings.cpp", "src/Core/SettingsChangesHistory.cpp", "src/Storages/MergeTree/MergeTreeBlockReadUtils.cpp"]},
+    {"pr": 121118, "files": ["src/Parsers/Prometheus/PrometheusQueryParsingUtil-antlr.cpp"]},
+    {"pr": 121117, "files": ["src/Parsers/Prometheus/PrometheusQueryParsingUtil-antlr.cpp", "src/Storages/TimeSeries/PrometheusQueryToSQL/applyDateTimeFunction.cpp"]},
+    {"pr": 121106, "files": ["src/Parsers/Prometheus/tests/gtest_PromQLParser.cpp"]},
+    {"pr": 121063, "files": ["src/Storages/AlterCommands.cpp", "src/Storages/MergeTree/ReplicatedMergeTreeTableMetadata.cpp"]},
+    {"pr": 121029, "files": ["docs/reference/statements/alter/index.mdx", "src/Parsers/ParserAlterQuery.cpp"]},
+    {"pr": 120946, "files": ["src/Interpreters/MutationsInterpreter.cpp"]}
+  ],
+  "conflict_note": "These were observed while replaying history with git rebase --rebase-merges=no-rebase-cousins in run 36366163770. They were aborted without changing PR heads. This is not an exhaustive conflict inventory of all 96 PRs.",
+  "other_unpublished_findings": [
+    {"pr": 120914, "reason": "Canonical final patch differed after rebase; not published."},
+    {"pr": 120694, "reason": "git diff --check failed; not published."}
+  ],
+  "bulk_execution": [
+    {"run": 36366163770, "job": 108752900877, "status": "cancelled", "result": "Rebased candidates could not be published: Actions-token backup-ref pushes were rejected by GitHub's workflow-scope check. No PR-head updates succeeded from this runner."},
+    {"run": 36366794790, "job": 108754751552, "status": "cancelled", "result": "Replaced by staging-only attempt; no confirmed PR-head updates."},
+    {"run": 36366977289, "job": 108755487706, "status": "failed", "result": "Fetching the 96 shallow PR histories timed out after 240 seconds, before staging or publishing candidates. Audit write also failed on shallow.lock; this final report replaces the stale fetching phase."}
+  ],
+  "cleanup": "Temporary workflow files and worker removed from the helper branch in the same commit as this audit. Backup refs and this audit are retained. No further runner is active or scheduled. Upstream master and fork master were not modified."
 }
