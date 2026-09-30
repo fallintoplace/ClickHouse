@@ -11,19 +11,29 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Read failing integration test logs
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           base='https://s3.amazonaws.com/clickhouse-test-reports/115199/d603a51a0ba71074a0cc0c930ea0a2d92ff3845e/integration_tests__amd_asan_ubsan__targeted_'
-          for test in test_histogram_quantile test_histogram_quantile_with_float32_scalar; do
-            echo "::group::$test"
-            curl --fail --silent --show-error --retry 2 "$base/test_prometheus_protocols.test_evaluation.$test.log" | tail -220
-            echo '::endgroup::'
-          done
-      - name: Inspect source anchors
+          curl --fail --silent --show-error --max-time 60 "$base/integration_run_test_prometheus_protocols_test_evaluation.log.zst" -o /tmp/promql.log.zst
+          zstd -dc /tmp/promql.log.zst > /tmp/promql.log
+          grep -n -E -A 95 -B 8 'FAILURES|AssertionError|JSONDecodeError|DB::Exception|NUMBER_OF_COLUMNS_DOESNT_MATCH' /tmp/promql.log | tail -550
+      - name: Inspect exact source anchors
         shell: bash
         run: |
           set -euo pipefail
           base='https://raw.githubusercontent.com/fallintoplace/ClickHouse/d603a51a0ba71074a0cc0c930ea0a2d92ff3845e'
           curl --fail --silent --show-error "$base/src/AggregateFunctions/AggregateFunctionQuantile.h" | grep -A 8 -B 5 shouldPrintParametersWithTypes
-          curl --fail --silent --show-error "$base/tests/integration/test_prometheus_protocols/test_evaluation.py" | sed -n '5600,5840p'
+          curl --fail --silent --show-error "$base/src/AggregateFunctions/AggregateFunctionQuantilePrometheusHistogram.cpp" -o /tmp/histogram.cpp
+          sed -n '170,390p' /tmp/histogram.cpp
+          grep -n -A 60 -B 10 'getNormalizedStateType' /tmp/histogram.cpp
+          curl --fail --silent --show-error "$base/tests/integration/test_prometheus_protocols/test_evaluation.py" -o /tmp/evaluation.py
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          source = Path('/tmp/evaluation.py').read_text()
+          for node in ast.parse(source).body:
+              if isinstance(node, ast.FunctionDef) and node.name in {'test_histogram_quantile', 'test_histogram_quantile_with_float32_scalar'}:
+                  print(ast.get_source_segment(source, node))
+          PY
