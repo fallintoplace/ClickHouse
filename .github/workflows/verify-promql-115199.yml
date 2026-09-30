@@ -14,9 +14,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base='https://s3.amazonaws.com/clickhouse-test-reports/115199/d603a51a0ba71074a0cc0c930ea0a2d92ff3845e/integration_tests__amd_asan_ubsan__targeted_'
-          for test in test_histogram_quantile test_histogram_quantile_with_float32_scalar; do
-            echo "::group::$test"
-            curl --fail --silent --show-error --retry 2 "$base/test_prometheus_protocols_test_evaluation_${test}_0.log.zst" | zstd --decompress --stdout | tail -250
+          base='https://s3.amazonaws.com/clickhouse-test-reports/115199/d603a51a0ba71074a0cc0c930ea0a2d92ff3845e/integration_tests__amd_asan_ubsan__targeted__test_prometheus_protocols_test_evaluation.py'
+          for name in shuffle_test_prometheus_protocols_runner0.log.zst shuffle_test_prometheus_protocols_runner0.txt.zst; do
+            echo "::group::$name"
+            curl --fail --silent --show-error --retry 2 "$base/$name" -o /tmp/test-log.zst
+            zstd --decompress --stdout /tmp/test-log.zst > /tmp/test-log.txt
+            grep -n -E -A 100 -B 15 'FAILED|FAILURES|AssertionError|Exception|UNKNOWN|ILLEGAL|NUMBER_OF_ARGUMENTS|test_histogram_quantile' /tmp/test-log.txt | tail -900 || tail -200 /tmp/test-log.txt
             echo '::endgroup::'
           done
