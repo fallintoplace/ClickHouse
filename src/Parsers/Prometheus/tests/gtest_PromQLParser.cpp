@@ -2026,7 +2026,8 @@ TEST(PromQLParser, RejectUnicodeSurrogateEscapes)
 
 TEST(PromQLParser, StandaloneStepRangeFunctions)
 {
-    for (const auto * query : {"step()", "range()", "range() - step()", "step # comment\n()"})
+    for (const auto * query :
+         {"step()", "range()", "range() - step()", "step\n()", "range # comment\r()", "step # comment\n()"})
     {
         PrometheusQueryTree tree{query};
         EXPECT_EQ(tree.getResultType(), PrometheusQueryTree::ResultType::SCALAR) << query;
