@@ -21,7 +21,7 @@ class PrometheusQueryExecutionException final : public Exception
 public:
     template <typename... Args>
     explicit PrometheusQueryExecutionException(FormatStringHelper<Args...> fmt, Args &&... args)
-        : Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY, fmt, std::forward<Args>(args)...)
+        : Exception(ErrorCodes::CANNOT_EXECUTE_PROMQL_QUERY, std::move(fmt), std::forward<Args>(args)...)
     {
     }
 
