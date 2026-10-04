@@ -13,6 +13,7 @@ from .prometheus_test_utils import (
     extract_data_from_http_api_response,
     extract_error_from_http_api_response,
     get_response_to_http_api_query,
+    get_response_to_http_api_range_query,
     send_protobuf_to_remote_write,
 )
 
@@ -239,6 +240,22 @@ def test_error_while_validating():
     assert response.json()["errorType"] == "bad_data", response.text
     error_message = extract_error_from_http_api_response(response)
     assert "expects 3 arguments" in error_message
+
+
+def test_unsupported_execution_error():
+    response = get_response_to_http_api_range_query(
+        node.ip_address,
+        9093,
+        "/api/v1/query_range",
+        "quantile_over_time(time(), foo[3m] @ 150)",
+        160,
+        170,
+        10,
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["errorType"] == "execution", response.text
+    error_message = extract_error_from_http_api_response(response)
+    assert "does not support a time-varying first argument" in error_message
 
 
 # Checks the case when an exception appears before any block has been written to the response buffer.

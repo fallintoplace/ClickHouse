@@ -325,7 +325,7 @@ SELECT timeSeriesThrowDuplicateSeriesIf(1, group)
 FROM
 (
     SELECT timeSeriesTagsToGroup([('__name__', 'up')]) AS group
-);  -- { serverError PROMQL_QUERY_EXECUTION_ERROR }
+);  -- { serverError CANNOT_EXECUTE_PROMQL_QUERY }
 
 SELECT '';
 SELECT 'timeSeriesThrowDuplicateSeriesIf vectorized all-zero:';
@@ -356,7 +356,7 @@ FROM
     SELECT number,
            timeSeriesTagsToGroup([('__name__', 'up'), ('instance', toString(number))]) AS group
     FROM numbers(4)
-);  -- { serverError PROMQL_QUERY_EXECUTION_ERROR }
+);  -- { serverError CANNOT_EXECUTE_PROMQL_QUERY }
 
 SELECT '';
 SELECT 'timeSeriesRemoveTag vectorized dense groups:';
