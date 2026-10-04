@@ -119,6 +119,22 @@ FROM (EXPLAIN actions = 1, compact = 0, pretty = 0
     PREWHERE notEmpty(s)
     SETTINGS optimize_functions_to_subcolumns = 1, optimize_move_to_prewhere = 0);
 
+SELECT 'same-step full String PREWHERE consumer keeps the full String filter';
+SELECT countIf(explain ILIKE '%s.size%') = 0
+FROM (EXPLAIN actions = 1, compact = 0, pretty = 0
+    SELECT s
+    FROM test_string_filter_only
+    PREWHERE notEmpty(s) AND position(s, 'h') = 1
+    SETTINGS optimize_functions_to_subcolumns = 1, optimize_move_to_prewhere = 0);
+
+SELECT 'separate PREWHERE step still uses String size';
+SELECT countIf(explain ILIKE '%s.size%') > 0
+FROM (EXPLAIN actions = 1, compact = 0, pretty = 0
+    SELECT s
+    FROM test_string_filter_only
+    PREWHERE notEmpty(s) AND id % 2 = 1 AND position(s, 'h') = 1
+    SETTINGS optimize_functions_to_subcolumns = 1, optimize_move_to_prewhere = 0);
+
 SELECT 'full String stays available after the filter';
 SELECT id, s
 FROM test_string_filter_only
