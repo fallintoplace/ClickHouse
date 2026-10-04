@@ -4,6 +4,8 @@ tuple function with CUBE	4
 tuple function with ROLLUP	4
 parenthesized key list with CUBE	9
 parenthesized key list with ROLLUP	7
+positional tuple key with CUBE	4
+positional tuple key with ROLLUP	4
 tuple key in CUBE(...)	4
 tuple key in ROLLUP(...)	4
 tuple key with scalar and CUBE	10

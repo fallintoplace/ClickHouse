@@ -4638,13 +4638,13 @@ void QueryAnalyzer::resolveGroupByNode(QueryNode & query_node_typed, IdentifierR
     {
         auto & group_by_list = query_node_typed.getGroupBy().getNodes();
 
-        replaceNodesWithPositionalArguments(query_node_typed.getGroupByNode(), query_node_typed.getProjection().getNodes(), scope);
-
-        /// Record the parenthesized key-list shorthand while it is still an unresolved tuple expression.
-        /// Alias resolution can also turn an identifier into a tuple, but that alias must stay one key.
+        /// Record the parenthesized key-list shorthand before positional replacement and alias resolution.
+        /// Both can turn a non-tuple GROUP BY expression into a tuple, but that resolved tuple must stay one key.
         const bool expand_parenthesized_key_list =
             (query_node_typed.isGroupByWithRollup() || query_node_typed.isGroupByWithCube())
             && group_by_list.size() == 1 && isTupleOperator(group_by_list.front());
+
+        replaceNodesWithPositionalArguments(query_node_typed.getGroupByNode(), query_node_typed.getProjection().getNodes(), scope);
 
         resolveExpressionNodeList(query_node_typed.getGroupByNode(), scope, false /*allow_lambda_expression*/, false /*allow_table_expression*/);
 

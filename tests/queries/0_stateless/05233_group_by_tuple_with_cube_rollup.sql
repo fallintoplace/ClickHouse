@@ -69,6 +69,24 @@ FROM
     GROUP BY (number, number % 2) WITH ROLLUP
 );
 
+SELECT 'positional tuple key with CUBE', count()
+FROM
+(
+    SELECT (number, number % 2), count()
+    FROM numbers(3)
+    GROUP BY 1 WITH CUBE
+    SETTINGS enable_positional_arguments = 1
+);
+
+SELECT 'positional tuple key with ROLLUP', count()
+FROM
+(
+    SELECT (number, number % 2), count()
+    FROM numbers(3)
+    GROUP BY 1 WITH ROLLUP
+    SETTINGS enable_positional_arguments = 1
+);
+
 SELECT 'tuple key in CUBE(...)', count()
 FROM
 (
