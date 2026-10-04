@@ -1680,6 +1680,117 @@ private:
     }
 };
 
+/// Collect enough information to avoid the known no-win case where a String-size
+/// predicate and a full-String predicate are evaluated in the same PREWHERE read step.
+/// The read-step builder groups adjacent conjuncts with the same column dependencies;
+/// mirror that grouping here before introducing the extra .size input.
+struct PrewhereAtomStringUsage
+{
+    ColumnInSourceSet required_columns;
+    ColumnInSourceSet size_transform_columns;
+    ColumnInSourceSet full_string_columns;
+};
+
+void collectPrewhereAtomStringUsage(const QueryTreeNodePtr & node, PrewhereAtomStringUsage & usage)
+{
+    if (!node || node->as<QueryNode>() || node->as<UnionNode>())
+        return;
+
+    if (const auto * function_node = node->as<FunctionNode>())
+    {
+        const auto & arguments = function_node->getArguments().getNodes();
+        const auto * candidate = arguments.empty() ? nullptr : arguments.front()->as<ColumnNode>();
+        if (candidate && !candidate->hasExpression() && candidate->getColumnType()->getTypeId() == TypeIndex::String
+            && transformers_optimize_in_filter_with_full_column.contains(
+                std::make_pair(TypeIndex::String, function_node->getFunctionName())))
+        {
+            auto source = candidate->getColumnSourceOrNull();
+            if (source && (source->as<TableNode>() || source->as<TableFunctionNode>()))
+            {
+                auto qualified_name = makeColumnInSource(source, candidate->getColumnName());
+                usage.required_columns.insert(qualified_name);
+                usage.size_transform_columns.insert(qualified_name);
+                for (size_t i = 1; i < arguments.size(); ++i)
+                    collectPrewhereAtomStringUsage(arguments[i], usage);
+                return;
+            }
+        }
+    }
+
+    if (const auto * column_node = node->as<ColumnNode>())
+    {
+        auto source = column_node->getColumnSourceOrNull();
+        if (!source || (!source->as<TableNode>() && !source->as<TableFunctionNode>()))
+            return;
+
+        auto qualified_name = makeColumnInSource(source, column_node->getColumnName());
+        usage.required_columns.insert(qualified_name);
+        if (!column_node->hasExpression() && column_node->getColumnType()->getTypeId() == TypeIndex::String)
+            usage.full_string_columns.insert(qualified_name);
+
+        if (column_node->hasExpression())
+            collectPrewhereAtomStringUsage(column_node->getExpression(), usage);
+        return;
+    }
+
+    for (const auto & child : node->getChildren())
+        collectPrewhereAtomStringUsage(child, usage);
+}
+
+void flattenPrewhereConjunction(const QueryTreeNodePtr & node, QueryTreeNodes & atoms)
+{
+    if (const auto * function_node = node->as<FunctionNode>();
+        function_node && function_node->getFunctionName() == "and")
+    {
+        for (const auto & argument : function_node->getArguments().getNodes())
+            flattenPrewhereConjunction(argument, atoms);
+        return;
+    }
+
+    atoms.push_back(node);
+}
+
+ColumnInSourceSet getBlockedStringFullReadRewrites(const QueryTreeNodePtr & prewhere)
+{
+    QueryTreeNodes atoms;
+    flattenPrewhereConjunction(prewhere, atoms);
+
+    ColumnInSourceSet blocked;
+    PrewhereAtomStringUsage run;
+    bool has_run = false;
+
+    auto finish_run = [&]
+    {
+        for (const auto & column : run.size_transform_columns)
+            if (run.full_string_columns.contains(column))
+                blocked.insert(column);
+    };
+
+    for (const auto & atom : atoms)
+    {
+        PrewhereAtomStringUsage current;
+        collectPrewhereAtomStringUsage(atom, current);
+
+        if (!has_run || run.required_columns == current.required_columns)
+        {
+            run.size_transform_columns.insert(current.size_transform_columns.begin(), current.size_transform_columns.end());
+            run.full_string_columns.insert(current.full_string_columns.begin(), current.full_string_columns.end());
+            if (!has_run)
+                run.required_columns = current.required_columns;
+            has_run = true;
+            continue;
+        }
+
+        finish_run();
+        run = std::move(current);
+    }
+
+    if (has_run)
+        finish_run();
+
+    return blocked;
+}
+
 /// Second pass optimizes functions to subcolumns for allowed identifiers.
 /// For identifiers in `filter_only`, the rewrite is restricted to WHERE/PREWHERE
 /// clauses only, with full-read String rewrites restricted further to PREWHERE.
@@ -1693,6 +1804,8 @@ private:
 
     /// One entry per QueryNode depth. Full-read String rewrites require Prewhere.
     std::vector<FilterClause> filter_clause_stack;
+    /// Per-query String rewrites that would share a PREWHERE step with a full-String consumer.
+    std::vector<ColumnInSourceSet> blocked_string_full_read_rewrites_stack;
 
     CorrelatedColumnsStack correlated_columns;
     SubcolumnSupportCache subcolumn_support_cache;
@@ -1735,6 +1848,8 @@ public:
         if (const auto * query_node = node->as<QueryNode>())
         {
             filter_clause_stack.push_back(FilterClause::None);
+            blocked_string_full_read_rewrites_stack.push_back(
+                query_node->hasPrewhere() ? getBlockedStringFullReadRewrites(query_node->getPrewhere()) : ColumnInSourceSet{});
             correlated_columns.enter(query_node->getCorrelatedColumns());
             return;
         }
@@ -1772,7 +1887,8 @@ public:
                 && (column.type->getTypeId() != TypeIndex::String
                     || (filter_clause_stack.back() == FilterClause::Prewhere
                         && getSettings()[Setting::optimize_string_size_subcolumn_with_full_read]
-                        && !getSettings()[Setting::apply_mutations_on_fly])))
+                        && !getSettings()[Setting::apply_mutations_on_fly]
+                        && !blocked_string_full_read_rewrites_stack.back().contains(qualified_name))))
                 should_optimize = true;
 
             if (!should_optimize)
@@ -1826,6 +1942,7 @@ public:
         if (node->as<QueryNode>())
         {
             filter_clause_stack.pop_back();
+            blocked_string_full_read_rewrites_stack.pop_back();
             correlated_columns.leave();
         }
         else if (node->as<UnionNode>())
