@@ -25,6 +25,10 @@ empty uses String size with full column
 1
 notEmpty uses String size with full column
 1
+same-step full String PREWHERE consumer keeps the full String filter
+1
+separate PREWHERE step still uses String size
+1
 full String stays available after the filter
 1	hello
 3	world
