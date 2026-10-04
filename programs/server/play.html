@@ -8903,8 +8903,15 @@ function canSendRawAuthHeader(value) {
 
 const encodedWebUIAuthPrefix = 'ClickHouse-Play-Percent:';
 
+function canSendRawAuthCredentials(user, password) {
+    return canSendRawAuthHeader(user)
+        && canSendRawAuthHeader(password)
+        && !user.startsWith(encodedWebUIAuthPrefix)
+        && !password.startsWith(encodedWebUIAuthPrefix);
+}
+
 function getAuthHeaders(user, password) {
-    const send_raw = canSendRawAuthHeader(user) && canSendRawAuthHeader(password);
+    const send_raw = canSendRawAuthCredentials(user, password);
     const headers = { 'Authorization': 'never', 'X-Requested-With': 'ClickHouse-Play' };
 
     if (send_raw) {
@@ -8979,7 +8986,7 @@ async function responseProvesLegacyEncodedWebUIAuth(response) {
 }
 
 async function fetchWithRequestAuth(url, options, _server_address, user, password) {
-    const send_raw = canSendRawAuthHeader(user) && canSendRawAuthHeader(password);
+    const send_raw = canSendRawAuthCredentials(user, password);
     let response = await fetch(url, { ...options, headers: getAuthHeaders(user, password) });
 
     if (send_raw) {
@@ -9016,7 +9023,7 @@ async function probeServerStatus(server_address, user, password) {
         headers,
     });
     try {
-        const send_raw = canSendRawAuthHeader(user) && canSendRawAuthHeader(password);
+        const send_raw = canSendRawAuthCredentials(user, password);
         if (!send_raw) {
             const response = await fetchWithRequestAuth(
                 url,

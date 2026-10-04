@@ -123,6 +123,7 @@ def test_play_auth_headers_preserve_credentials_with_database_path(started_clust
         )
 
         encoded_headers = {
+            "X-Requested-With": "ClickHouse-Play",
             "X-ClickHouse-User": encoded_prefix + quote(user),
             "X-ClickHouse-Key": encoded_prefix + quote(password),
         }
@@ -159,6 +160,44 @@ def test_play_auth_headers_preserve_credentials_with_database_path(started_clust
             ].lower()
     finally:
         node.query("DROP USER IF EXISTS '{}'".format(user))
+
+
+def test_literal_encoded_auth_prefix_is_not_decoded_without_play_marker(started_cluster):
+    encoded_prefix = "ClickHouse-Play-Percent:"
+    user = encoded_prefix + "literal_auth_user"
+    password = encoded_prefix + "literal_auth_password"
+    stripped_user = "literal_auth_user"
+    stripped_password = "literal_auth_password"
+
+    node.query("DROP USER IF EXISTS '{}'".format(user))
+    node.query("DROP USER IF EXISTS '{}'".format(stripped_user))
+    try:
+        node.query(
+            "CREATE USER '{}' IDENTIFIED WITH sha256_password BY '{}'".format(
+                user, password
+            )
+        )
+        node.query(
+            "CREATE USER '{}' IDENTIFIED WITH sha256_password BY '{}'".format(
+                stripped_user, stripped_password
+            )
+        )
+
+        response = node.http_request(
+            "default",
+            method="POST",
+            data="SELECT currentUser()",
+            headers={
+                "X-ClickHouse-User": user,
+                "X-ClickHouse-Key": password,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.content.decode("utf-8") == user + "\n"
+        assert "X-ClickHouse-Auth-Encoding" not in response.headers
+    finally:
+        node.query("DROP USER IF EXISTS '{}'".format(user))
+        node.query("DROP USER IF EXISTS '{}'".format(stripped_user))
 
 
 def test_play_raw_auth_headers_survive_proxy_authorization_rewrite(started_cluster):

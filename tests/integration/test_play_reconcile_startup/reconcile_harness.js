@@ -509,6 +509,18 @@ async function checkAuthHeaderTransport(js) {
             'X-ClickHouse-User': 'alice',
             'X-ClickHouse-Key': 'p&?#%',
         }],
+        ['reserved-prefix-user', encodedAuthPrefix + 'alice', 'secret', {
+            Authorization: 'never',
+            'X-Requested-With': 'ClickHouse-Play',
+            'X-ClickHouse-User': encodedAuthPrefix + 'ClickHouse-Play-Percent%3Aalice',
+            'X-ClickHouse-Key': encodedAuthPrefix + 'secret',
+        }],
+        ['reserved-prefix-password', 'alice', encodedAuthPrefix + 'secret', {
+            Authorization: 'never',
+            'X-Requested-With': 'ClickHouse-Play',
+            'X-ClickHouse-User': encodedAuthPrefix + 'alice',
+            'X-ClickHouse-Key': encodedAuthPrefix + 'ClickHouse-Play-Percent%3Asecret',
+        }],
         ['utf8-and-spaces', 'play:юзер', '  päss 密码  ', {
             Authorization: 'never',
             'X-Requested-With': 'ClickHouse-Play',

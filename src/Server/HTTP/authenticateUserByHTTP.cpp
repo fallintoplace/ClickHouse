@@ -140,16 +140,17 @@ bool authenticateUserByHTTP(
     std::string user = request.get("X-ClickHouse-User", "");
     std::string password = request.get("X-ClickHouse-Key", "");
 
-    /// Unsafe browser header values are percent-encoded by play.html. Keep the marker in the
-    /// X-ClickHouse credential values themselves so decoding does not depend on Authorization
-    /// surviving an intermediary and does not require a new CORS request header.
+    /// Unsafe browser header values are percent-encoded by play.html. Only interpret the
+    /// reserved credential prefix on explicitly marked ClickHouse Play requests, otherwise
+    /// ordinary X-ClickHouse clients could have legitimate credentials with the same prefix.
     static constexpr std::string_view encoded_web_ui_auth_prefix = "ClickHouse-Play-Percent:";
+    const bool has_scripted_web_ui_marker = request.get("X-Requested-With", "") == "ClickHouse-Play";
     const bool has_encoded_web_ui_auth
-        = user.starts_with(encoded_web_ui_auth_prefix) && password.starts_with(encoded_web_ui_auth_prefix);
+        = has_scripted_web_ui_marker
+        && user.starts_with(encoded_web_ui_auth_prefix)
+        && password.starts_with(encoded_web_ui_auth_prefix);
     const bool has_scripted_web_ui_auth
-        = authorization_header == "never"
-        || request.get("X-Requested-With", "") == "ClickHouse-Play"
-        || has_encoded_web_ui_auth;
+        = authorization_header == "never" || has_scripted_web_ui_marker;
     if (has_encoded_web_ui_auth)
     {
         response.set("X-ClickHouse-Auth-Encoding", "percent");
@@ -181,8 +182,8 @@ bool authenticateUserByHTTP(
     /// Whether the request carries an `Authorization` header that should be treated as
     /// credentials. Scripted Web UI requests are marked with the long-standing CORS-allowed
     /// X-Requested-With header, so a proxy may rewrite Authorization without turning their
-    /// X-ClickHouse credentials into mixed auth. Encoded credentials also carry their marker
-    /// in X-ClickHouse-User and X-ClickHouse-Key as a second proxy-stable signal.
+    /// X-ClickHouse credentials into mixed auth. The same explicit marker gates decoding of
+    /// percent-encoded Web UI credentials.
     const bool suppress_browser_basic_auth = has_scripted_web_ui_auth;
     bool has_authorization_header = !suppress_browser_basic_auth && request.hasCredentials();
 
@@ -198,7 +199,7 @@ bool authenticateUserByHTTP(
     /// parameters, so without this precedence a download request would carry both the remembered
     /// header and the parameters and be rejected. Scripted requests use `Authorization: never`
     /// plus `X-Requested-With: ClickHouse-Play`; the latter remains self-describing if a proxy
-    /// rewrites Authorization. Encoded X-ClickHouse headers additionally carry their own marker.
+    /// rewrites Authorization and explicitly identifies encoded Web UI credentials.
     ///
     /// This precedence applies only to the default authentication path. When the handler has
     /// its own configured credentials, an `Authorization` header is still rejected as a mix of
