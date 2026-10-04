@@ -63,6 +63,7 @@ namespace ErrorCodes
     extern const int INCOMPATIBLE_SCHEMA;
     extern const int SUPPORT_IS_DISABLED;
     extern const int NOT_IMPLEMENTED;
+    extern const int TIMEOUT_EXCEEDED;
     extern const int SNAPPY_UNCOMPRESS_FAILED;
     extern const int UNSUPPORTED_MEDIA_TYPE;
     extern const int ZSTD_DECODER_FAILED;
