@@ -35,6 +35,7 @@ format PrettyCompactNoEscapes;
 
 -- The SQL standard makes fetch_row_count optional and defaults it to 1.
 SELECT number FROM numbers(3) ORDER BY number FETCH FIRST ROW ONLY;
+SELECT number FROM numbers(3) ORDER BY number FETCH FIRST ROWS ONLY;
 SELECT number FROM numbers(3) ORDER BY number OFFSET 1 ROWS FETCH NEXT ROW ONLY;
 SELECT number % 2 FROM numbers(4) ORDER BY number % 2 FETCH FIRST ROW WITH TIES;
 
