@@ -213,12 +213,23 @@ namespace
                 size_t c = stream->LA(i);
                 if (c == antlr4::IntStream::EOF)
                     return false;
+                if (in_comment)
+                {
+                    if (c == '\r' || c == '\n')
+                        in_comment = false;
+                    continue;
+                }
+
                 if (c == '#')
+                {
                     in_comment = true;
-                else if (c == '\n')
-                    in_comment = false;
-                else if (!in_comment && c != ' ' && c != '\t' && c != '\r')
-                    return c == '(';
+                    continue;
+                }
+
+                if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+                    continue;
+
+                return c == '(';
             }
         }
 
