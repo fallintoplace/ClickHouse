@@ -964,6 +964,14 @@ std::set<std::pair<TypeIndex, String>> transformers_optimize_in_filter_with_full
     {TypeIndex::QBit, "tupleElement"},
 };
 
+/// Some filter-only rewrites are beneficial only in PREWHERE when the full
+/// column is selected. Plain WHERE still reads the full column before filtering,
+/// so introducing a subcolumn there would add a second read.
+std::set<std::pair<TypeIndex, String>> transformers_optimize_only_in_prewhere_with_full_column =
+{
+    {TypeIndex::Map, "mapContainsValue"},
+};
+
 /// Optimizes:
 ///   tupleElement(... tupleElement(arrayElement(ColumnNode(Dynamic), N), 'f1') ..., 'fK')
 /// to:
@@ -1414,6 +1422,7 @@ public:
             /// Push a placeholder for this query level; needChildVisit will update it
             /// to true when we descend into WHERE or PREWHERE.
             in_where_prewhere_stack.push_back(false);
+            in_prewhere_stack.push_back(false);
             correlated_columns.enter(query_node->getCorrelatedColumns());
             return;
         }
@@ -1433,6 +1442,7 @@ public:
         if (node->as<QueryNode>())
         {
             in_where_prewhere_stack.pop_back();
+            in_prewhere_stack.pop_back();
             correlated_columns.leave();
         }
         else if (node->as<UnionNode>())
@@ -1450,6 +1460,7 @@ public:
                 bool is_where = query_node->hasWhere() && child.get() == query_node->getWhere().get();
                 bool is_prewhere = query_node->hasPrewhere() && child.get() == query_node->getPrewhere().get();
                 in_where_prewhere_stack.back() = is_where || is_prewhere;
+                in_prewhere_stack.back() = is_prewhere;
             }
         }
         return true;
@@ -1530,6 +1541,8 @@ private:
     /// Stack tracking whether the current node is inside a WHERE or PREWHERE clause.
     /// One entry per QueryNode depth; true means we are inside WHERE/PREWHERE.
     std::vector<bool> in_where_prewhere_stack;
+    /// Same query-depth tracking, true only while visiting PREWHERE.
+    std::vector<bool> in_prewhere_stack;
 
     CorrelatedColumnsStack correlated_columns;
 
@@ -1608,7 +1621,9 @@ private:
             if (transformers_safe_with_indexes.contains(transformer_key))
                 ++optimized_identifiers_index_safe_count[qualified_name];
             if (transformers_optimize_in_filter_with_full_column.contains(transformer_key)
-                && !in_where_prewhere_stack.empty() && in_where_prewhere_stack.back())
+                && !in_where_prewhere_stack.empty() && in_where_prewhere_stack.back()
+                && (!transformers_optimize_only_in_prewhere_with_full_column.contains(transformer_key)
+                    || (!in_prewhere_stack.empty() && in_prewhere_stack.back())))
                 identifiers_with_filter_optimization.insert(qualified_name);
         }
     }
@@ -1658,6 +1673,8 @@ private:
     /// Stack tracking whether the current node is inside a WHERE or PREWHERE clause.
     /// One entry per QueryNode depth; true means we are inside WHERE/PREWHERE.
     std::vector<bool> in_where_prewhere_stack;
+    /// Same query-depth tracking, true only while visiting PREWHERE.
+    std::vector<bool> in_prewhere_stack;
 
     CorrelatedColumnsStack correlated_columns;
     SubcolumnSupportCache subcolumn_support_cache;
@@ -1684,6 +1701,7 @@ public:
                 bool is_where = query_node->hasWhere() && child.get() == query_node->getWhere().get();
                 bool is_prewhere = query_node->hasPrewhere() && child.get() == query_node->getPrewhere().get();
                 in_where_prewhere_stack.back() = is_where || is_prewhere;
+                in_prewhere_stack.back() = is_prewhere;
             }
         }
         return true;
@@ -1697,6 +1715,7 @@ public:
         if (const auto * query_node = node->as<QueryNode>())
         {
             in_where_prewhere_stack.push_back(false);
+            in_prewhere_stack.push_back(false);
             correlated_columns.enter(query_node->getCorrelatedColumns());
             return;
         }
@@ -1723,20 +1742,23 @@ public:
                 return;
 
             /// For "filter_only" identifiers, only optimize when inside WHERE/PREWHERE.
-            /// The permission is intentionally scoped to the whole identifier,
-            /// not to the transformer that caused it to be marked.
+            /// The permission is intentionally scoped to the whole identifier, except
+            /// for transformers that require PREWHERE to avoid introducing an extra read.
+            auto transformer_key = std::make_pair(column.type->getTypeId(), function_node->getFunctionName());
             bool should_optimize = identifiers_to_optimize.everywhere.contains(qualified_name);
             if (!should_optimize
                 && identifiers_to_optimize.filter_only.contains(qualified_name)
                 && !in_where_prewhere_stack.empty()
-                && in_where_prewhere_stack.back())
+                && in_where_prewhere_stack.back()
+                && (!transformers_optimize_only_in_prewhere_with_full_column.contains(transformer_key)
+                    || (!in_prewhere_stack.empty() && in_prewhere_stack.back())))
                 should_optimize = true;
 
             if (!should_optimize)
                 return;
 
             auto result_type = function_node->getResultType();
-            auto transformer_it = node_transformers.find({column.type->getTypeId(), function_node->getFunctionName()});
+            auto transformer_it = node_transformers.find(transformer_key);
 
             if (transformer_it != node_transformers.end()
                 && (transformer_it->first.first != TypeIndex::Nullable || !outer_joined_tables.contains(column_source.get())))
@@ -1783,6 +1805,7 @@ public:
         if (node->as<QueryNode>())
         {
             in_where_prewhere_stack.pop_back();
+            in_prewhere_stack.pop_back();
             correlated_columns.leave();
         }
         else if (node->as<UnionNode>())
