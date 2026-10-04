@@ -193,3 +193,23 @@ FROM
 GROUP BY ALL WITH ROLLUP
 ORDER BY ALL
 FORMAT Null;
+
+-- Function-syntax tuple keys must not change the shared parser AST. The legacy analyzer
+-- still consumes that AST and must keep matching the same tuple expression after aggregation.
+SET enable_analyzer = 0;
+
+SELECT 'legacy tuple key in CUBE(...)', count()
+FROM
+(
+    SELECT (number, number % 2), count()
+    FROM numbers(3)
+    GROUP BY CUBE((number, number % 2))
+);
+
+SELECT 'legacy tuple key in ROLLUP(...)', count()
+FROM
+(
+    SELECT (number, number % 2), count()
+    FROM numbers(3)
+    GROUP BY ROLLUP((number, number % 2))
+);

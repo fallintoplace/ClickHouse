@@ -4642,6 +4642,7 @@ void QueryAnalyzer::resolveGroupByNode(QueryNode & query_node_typed, IdentifierR
         /// Both can turn a non-tuple GROUP BY expression into a tuple, but that resolved tuple must stay one key.
         const bool expand_parenthesized_key_list =
             (query_node_typed.isGroupByWithRollup() || query_node_typed.isGroupByWithCube())
+            && !query_node_typed.isGroupByRollupOrCubeTupleKeyFromFunctionSyntax()
             && group_by_list.size() == 1 && isTupleOperator(group_by_list.front());
 
         replaceNodesWithPositionalArguments(query_node_typed.getGroupByNode(), query_node_typed.getProjection().getNodes(), scope);
