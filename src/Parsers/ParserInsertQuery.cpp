@@ -13,8 +13,6 @@
 #include <Parsers/ParserInsertQuery.h>
 #include <Parsers/ParserSetQuery.h>
 #include <Parsers/InsertQuerySettingsPushDownVisitor.h>
-#include <Parsers/StatementFactory.h>
-#include <Parsers/registerStatements.h>
 #include <Common/typeid_cast.h>
 
 
@@ -392,14 +390,11 @@ bool ParserInsertElement::parseImpl(Pos & pos, ASTPtr & node, Expected & expecte
         || ParserCompoundIdentifier().parse(pos, node, expected);
 }
 
-}
-
-namespace DB
+std::map<String, Documentation> ParserInsertQuery::getDocumentation() const
 {
+    std::map<String, Documentation> documentation;
 
-void registerStatementInsert(StatementFactory & factory)
-{
-    factory.registerStatement("INSERT INTO",
+    documentation["INSERT INTO"] =
     {
         .description = R"DOCS_MD(
 Inserts data into a table.
@@ -714,7 +709,9 @@ INSERT INTO [TABLE] [db.]table BY NAME [SETTINGS ...] SELECT ...
 INSERT INTO [TABLE] FUNCTION table_func(...) [(c1, c2, c3)] [SETTINGS ...] SELECT ...
 )",
         .related = {"SELECT", "FORMAT", "CREATE TABLE", "UPDATE", "DELETE"},
-    });
+    };
+
+    return documentation;
 }
 
 }
