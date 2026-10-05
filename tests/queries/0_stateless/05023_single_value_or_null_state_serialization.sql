@@ -71,6 +71,10 @@ CREATE TABLE single_value_or_null_legacy_unversioned
 ENGINE = MergeTree
 ORDER BY id;
 
+-- Seed a valid current-version part before simulating old metadata so mutation coverage has a row.
+INSERT INTO single_value_or_null_legacy_unversioned
+SELECT 0, singleValueOrNullState(toUInt64(42));
+
 -- Restating the type without a version simulates metadata written before singleValueOrNull state versioning.
 ALTER TABLE single_value_or_null_legacy_unversioned
     MODIFY COLUMN state AggregateFunction(singleValueOrNull, UInt64);
@@ -86,6 +90,11 @@ WHERE database = currentDatabase()
 
 INSERT INTO single_value_or_null_legacy_unversioned
 SELECT 1, singleValueOrNullState(toUInt64(42)); -- { serverError ILLEGAL_COLUMN }
+
+-- Mutations bypass InsertDependenciesBuilder. They must reject a regenerated legacy state too.
+ALTER TABLE single_value_or_null_legacy_unversioned
+    UPDATE state = arrayReduce('singleValueOrNullState', [toUInt64(43)])
+    WHERE id = 0; -- { serverError ILLEGAL_COLUMN }
 
 DROP VIEW IF EXISTS single_value_or_null_legacy_mv;
 DROP TABLE IF EXISTS single_value_or_null_legacy_mv_source;
@@ -168,3 +177,34 @@ SELECT singleValueOrNullTupleMerge(state)
 FROM single_value_or_null_tuple_legacy_unversioned;
 
 DROP TABLE single_value_or_null_tuple_legacy_unversioned;
+
+
+DROP TABLE IF EXISTS single_value_or_null_legacy_memory;
+
+CREATE TABLE single_value_or_null_legacy_memory
+(
+    id UInt8,
+    state AggregateFunction(singleValueOrNull, UInt64)
+)
+ENGINE = Memory;
+
+-- Memory stores aggregate states as in-memory columns and never serializes them to the legacy payload.
+ALTER TABLE single_value_or_null_legacy_memory
+    MODIFY COLUMN state AggregateFunction(singleValueOrNull, UInt64);
+
+DETACH TABLE single_value_or_null_legacy_memory;
+ATTACH TABLE single_value_or_null_legacy_memory;
+
+SELECT type
+FROM system.columns
+WHERE database = currentDatabase()
+    AND table = 'single_value_or_null_legacy_memory'
+    AND name = 'state';
+
+INSERT INTO single_value_or_null_legacy_memory
+SELECT 1, singleValueOrNullState(toUInt64(42));
+
+SELECT singleValueOrNullMerge(state)
+FROM single_value_or_null_legacy_memory;
+
+DROP TABLE single_value_or_null_legacy_memory;
