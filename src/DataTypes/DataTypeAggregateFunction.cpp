@@ -419,6 +419,22 @@ static void setVersionToAggregateFunctionsImpl(
     callOnNestedSimpleTypes(type, callback);
 }
 
+bool hasLegacyUnversionedAggregateStateRequiringMigration(const DataTypePtr & type)
+{
+    bool found = false;
+    DataTypePtr inspected_type = type;
+    setVersionToAggregateFunctionsImpl(
+        inspected_type,
+        /* if_empty= */ true,
+        [&found](const AggregateFunctionPtr & function) -> std::optional<size_t>
+        {
+            if (function->requiresExplicitStateVersionForWrite())
+                found = true;
+            return std::nullopt;
+        });
+    return found;
+}
+
 void setVersionToAggregateFunctions(DataTypePtr & type, bool if_empty, std::optional<size_t> revision)
 {
     setVersionToAggregateFunctionsImpl(type, if_empty, [revision](const AggregateFunctionPtr & function)
