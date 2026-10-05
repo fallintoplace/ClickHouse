@@ -192,7 +192,15 @@ size_t NativeWriter::write(const Block & block)
         /// stored column (`pinCurrentStateVersionToAggregateFunctions`) has to survive, or the state
         /// would silently degrade to version 0 on every round trip through local persistence.
         bool include_version = client_revision >= DBMS_MIN_REVISION_WITH_AGGREGATE_FUNCTIONS_VERSIONING;
-        setVersionToAggregateFunctions(column.type, /* if_empty= */ client_revision == 0, include_version ? std::optional<size_t>(client_revision) : std::nullopt);
+        /// Peers older than aggregate-function versioning still need the payload rewritten to v0,
+        /// but they cannot parse AggregateFunction(0, ...). Keep the temporary type pinned to v0 for
+        /// serialization while preserving the legacy unversioned spelling on that negotiated wire.
+        const bool print_explicit_zero_in_name = client_revision == 0 || include_version;
+        setVersionToAggregateFunctions(
+            column.type,
+            /* if_empty= */ client_revision == 0,
+            include_version ? std::optional<size_t>(client_revision) : std::nullopt,
+            print_explicit_zero_in_name);
 
         /// Type
         if (format_settings && format_settings->native.encode_types_in_binary_format)
