@@ -102,6 +102,7 @@ public:
     ///
     /// Whether the version was pinned explicitly, as opposed to falling back to the default one.
     bool hasExplicitVersion() const { return version.has_value(); }
+    bool printsExplicitZeroInName() const { return print_explicit_zero_in_name; }
 };
 
 /// Pins the state version of every versioned aggregate function nested in `type` to the one that
