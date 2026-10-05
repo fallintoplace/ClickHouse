@@ -4,14 +4,12 @@
 #include <Access/Common/AccessFlags.h>
 #include <Common/MemoryTrackerUtils.h>
 #include <AggregateFunctions/AggregateFunctionFactory.h>
-#include <AggregateFunctions/IAggregateFunction.h>
 #include <Columns/ColumnNullable.h>
 #include <Core/Settings.h>
 #include <Common/MemoryTracker.h>
 #include <Core/SettingsEnums.h>
 #include <Core/ServerSettings.h>
 #include <Core/DeduplicateInsert.h>
-#include <DataTypes/DataTypeAggregateFunction.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <Interpreters/ApplyWithAliasVisitor.h>
 #include <Interpreters/ApplyWithSubqueryVisitor.h>
@@ -205,54 +203,6 @@ StoragePtr InterpreterInsertQuery::getTable(ASTInsertQuery & query)
     return resolveStorageProxyLoading(DatabaseCatalog::instance().getTable(query.table_id, current_context));
 }
 
-namespace
-{
-
-bool hasLegacyUnversionedAggregateStateRequiringMigration(const DataTypePtr & type)
-{
-    bool found = false;
-    auto check_type = [&](const IDataType & nested_type)
-    {
-        const auto * aggregate_type = typeid_cast<const DataTypeAggregateFunction *>(&nested_type);
-        if (!aggregate_type
-            || aggregate_type->hasExplicitVersion()
-            || aggregate_type->getVersion() != aggregate_type->getFunction()->getDefaultVersion()
-            || !aggregate_type->getFunction()->requiresExplicitStateVersionForWrite())
-            return;
-
-        found = true;
-    };
-
-    check_type(*type);
-    type->forEachChild(check_type);
-    return found;
-}
-
-void checkLegacyAggregateStateInsert(const Block & block, const StoragePtr & table)
-{
-    for (const auto & column : block)
-    {
-        if (!hasLegacyUnversionedAggregateStateRequiringMigration(column.type))
-            continue;
-
-        DataTypePtr migration_type = column.type;
-        pinCurrentStateVersionToAggregateFunctions(migration_type);
-
-        throw Exception(
-            ErrorCodes::ILLEGAL_COLUMN,
-            "Cannot insert into legacy unversioned aggregate state column {} of table {} because its old "
-            "serialization is not safe for new writes. Migrate the column first with "
-            "ALTER TABLE {} MODIFY COLUMN {} {}",
-            backQuote(column.name),
-            table->getStorageID().getNameForLogs(),
-            table->getStorageID().getNameForLogs(),
-            backQuote(column.name),
-            migration_type->getName());
-    }
-}
-
-}
-
 Block InterpreterInsertQuery::getSampleBlock(
     const ASTInsertQuery & query,
     const StoragePtr & table,
@@ -261,12 +211,6 @@ Block InterpreterInsertQuery::getSampleBlock(
     bool no_destination,
     bool allow_materialized)
 {
-    /// Remote destinations negotiate the aggregate-state version with the peer. The guard below is
-    /// only for local table metadata that can otherwise keep writing the legacy layout after upgrade.
-    const bool check_legacy_state = !no_destination && !query.table_function && !table->isRemote();
-    if (check_legacy_state)
-        checkLegacyAggregateStateInsert(metadata_snapshot->getSampleBlock(), table);
-
     /// If the query does not include information about columns
     if (!query.columns)
     {

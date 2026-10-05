@@ -87,6 +87,28 @@ WHERE database = currentDatabase()
 INSERT INTO single_value_or_null_legacy_unversioned
 SELECT 1, singleValueOrNullState(toUInt64(42)); -- { serverError ILLEGAL_COLUMN }
 
+DROP VIEW IF EXISTS single_value_or_null_legacy_mv;
+DROP TABLE IF EXISTS single_value_or_null_legacy_mv_source;
+
+CREATE TABLE single_value_or_null_legacy_mv_source
+(
+    value UInt64
+)
+ENGINE = Memory;
+
+CREATE MATERIALIZED VIEW single_value_or_null_legacy_mv
+TO single_value_or_null_legacy_unversioned
+AS SELECT
+    toUInt8(1) AS id,
+    singleValueOrNullState(value) AS state
+FROM single_value_or_null_legacy_mv_source
+GROUP BY id;
+
+INSERT INTO single_value_or_null_legacy_mv_source VALUES (42); -- { serverError ILLEGAL_COLUMN }
+
+DROP VIEW single_value_or_null_legacy_mv;
+DROP TABLE single_value_or_null_legacy_mv_source;
+
 ALTER TABLE single_value_or_null_legacy_unversioned
     MODIFY COLUMN state AggregateFunction(1, singleValueOrNull, UInt64);
 
