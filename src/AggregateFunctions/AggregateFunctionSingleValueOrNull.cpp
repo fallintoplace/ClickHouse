@@ -174,6 +174,8 @@ public:
     /// The default version must stay 0 because unversioned states already exist in persisted data.
     size_t getDefaultVersion() const override { return 0; }
 
+    bool requiresExplicitStateVersionForWrite() const override { return true; }
+
     DataTypePtr getStateType() const override
     {
         return std::make_shared<DataTypeAggregateFunction>(this->shared_from_this(), this->argument_types, this->parameters, state_version);

@@ -102,8 +102,11 @@ public:
 
 /// Pins the state version of every versioned aggregate function nested in `type` to the one that
 /// corresponds to `revision`, or to 0 if no revision is given. With `if_empty`, a version that is
-/// already pinned explicitly is kept. The nested types are replaced rather than modified in place,
-/// because a type object is typically shared - notably with the table metadata a block was read from.
+/// already pinned explicitly is kept. A legacy unversioned state which requires an explicit version
+/// before new writes is also left unpinned while it still resolves to the function's default version,
+/// so metadata loaders can distinguish it from an explicit version 0 declaration. The nested types are
+/// replaced rather than modified in place, because a type object is typically shared - notably with
+/// the table metadata a block was read from.
 void setVersionToAggregateFunctions(DataTypePtr & type, bool if_empty, std::optional<size_t> revision = std::nullopt);
 
 /// For a freshly declared column type (`CREATE TABLE`): pins the state version the current server

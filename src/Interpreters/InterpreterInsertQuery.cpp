@@ -208,23 +208,19 @@ StoragePtr InterpreterInsertQuery::getTable(ASTInsertQuery & query)
 namespace
 {
 
-bool isLegacyUnversionedSingleValueOrNullState(const DataTypePtr & type)
+bool hasLegacyUnversionedAggregateStateRequiringMigration(const DataTypePtr & type)
 {
     bool found = false;
     auto check_type = [&](const IDataType & nested_type)
     {
         const auto * aggregate_type = typeid_cast<const DataTypeAggregateFunction *>(&nested_type);
-        if (!aggregate_type || aggregate_type->hasExplicitVersion() || aggregate_type->getVersion() != 0)
+        if (!aggregate_type
+            || aggregate_type->hasExplicitVersion()
+            || aggregate_type->getVersion() != aggregate_type->getFunction()->getDefaultVersion()
+            || !aggregate_type->getFunction()->requiresExplicitStateVersionForWrite())
             return;
 
-        for (auto function = aggregate_type->getFunction(); function; function = function->getNestedFunction())
-        {
-            if (function->getName() == "singleValueOrNull")
-            {
-                found = true;
-                return;
-            }
-        }
+        found = true;
     };
 
     check_type(*type);
@@ -232,11 +228,11 @@ bool isLegacyUnversionedSingleValueOrNullState(const DataTypePtr & type)
     return found;
 }
 
-void checkLegacySingleValueOrNullStateInsert(const Block & block, const StoragePtr & table)
+void checkLegacyAggregateStateInsert(const Block & block, const StoragePtr & table)
 {
     for (const auto & column : block)
     {
-        if (!isLegacyUnversionedSingleValueOrNullState(column.type))
+        if (!hasLegacyUnversionedAggregateStateRequiringMigration(column.type))
             continue;
 
         DataTypePtr migration_type = column.type;
@@ -244,9 +240,9 @@ void checkLegacySingleValueOrNullStateInsert(const Block & block, const StorageP
 
         throw Exception(
             ErrorCodes::ILLEGAL_COLUMN,
-            "Cannot insert into legacy unversioned aggregate state column {} of table {} because version 0 of "
-            "singleValueOrNull does not preserve whether the state saw one or multiple distinct values. "
-            "Migrate the column first with ALTER TABLE {} MODIFY COLUMN {} {}",
+            "Cannot insert into legacy unversioned aggregate state column {} of table {} because its old "
+            "serialization is not safe for new writes. Migrate the column first with "
+            "ALTER TABLE {} MODIFY COLUMN {} {}",
             backQuote(column.name),
             table->getStorageID().getNameForLogs(),
             table->getStorageID().getNameForLogs(),
@@ -277,7 +273,7 @@ Block InterpreterInsertQuery::getSampleBlock(
 
         Block result = metadata_snapshot->getSampleBlockNonMaterialized();
         if (check_legacy_state)
-            checkLegacySingleValueOrNullStateInsert(result, table);
+            checkLegacyAggregateStateInsert(result, table);
         return result;
     }
 
@@ -293,7 +289,7 @@ Block InterpreterInsertQuery::getSampleBlock(
 
     Block result = getSampleBlock(names, table, metadata_snapshot, no_destination, allow_materialized);
     if (check_legacy_state)
-        checkLegacySingleValueOrNullStateInsert(result, table);
+        checkLegacyAggregateStateInsert(result, table);
     return result;
 }
 

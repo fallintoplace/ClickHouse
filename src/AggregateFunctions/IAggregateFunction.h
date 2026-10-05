@@ -155,6 +155,15 @@ public:
 
     virtual size_t getDefaultVersion() const { return 0; }
 
+    /// Some legacy unversioned states are readable but cannot safely accept new writes because their
+    /// old serialization omits semantic information. Combinators propagate this property by default.
+    virtual bool requiresExplicitStateVersionForWrite() const
+    {
+        if (auto nested = getNestedFunction())
+            return nested->requiresExplicitStateVersionForWrite();
+        return false;
+    }
+
     /// Some aggregate functions have more efficient implementation for merging final states.
     /// See AggregateFunctionAny for example.
     virtual AggregateFunctionPtr getAggregateFunctionForMergingFinal() const { return shared_from_this(); }
