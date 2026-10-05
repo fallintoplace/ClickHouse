@@ -184,7 +184,7 @@ def test_literal_encoded_auth_prefix_is_not_decoded_without_play_marker(started_
         )
 
         response = node.http_request(
-            "default",
+            "",
             method="POST",
             data="SELECT currentUser()",
             headers={
