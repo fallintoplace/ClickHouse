@@ -372,19 +372,23 @@ static void setVersionToAggregateFunctionsImpl(
             return;
         const size_t new_version = *chosen_version;
 
+        if (aggregate_function_type->hasExplicitVersion() && aggregate_function_type->getVersion() == new_version)
+            return;
+
         /// Keep unsafe legacy unversioned metadata distinguishable from an explicit
         /// AggregateFunction(0, ...) declaration. Both read as version 0, but an unversioned type
         /// that requires an explicit version for new writes must remain recognizable after ATTACH.
         /// Once the function default moves past the legacy version this special case no longer applies.
-        if ((aggregate_function_type->hasExplicitVersion() && aggregate_function_type->getVersion() == new_version)
-            || (if_empty
-                && !aggregate_function_type->hasExplicitVersion()
-                && new_version == function->getDefaultVersion()
-                && function->requiresExplicitStateVersionForWrite()))
-            return;
+        const bool keep_legacy_unversioned = if_empty
+            && !aggregate_function_type->hasExplicitVersion()
+            && new_version == function->getDefaultVersion()
+            && function->requiresExplicitStateVersionForWrite();
 
         auto new_type = std::make_shared<DataTypeAggregateFunction>(
-            function, aggregate_function_type->getArgumentsDataTypes(), aggregate_function_type->getParameters(), new_version);
+            function,
+            aggregate_function_type->getArgumentsDataTypes(),
+            aggregate_function_type->getParameters(),
+            keep_legacy_unversioned ? std::nullopt : std::optional<size_t>(new_version));
 
         /// A custom name is part of the observable type and must survive the replacement. The only
         /// custom name an `AggregateFunction` type can carry is `SimpleAggregateFunction` over an
