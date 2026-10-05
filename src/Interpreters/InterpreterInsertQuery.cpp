@@ -264,6 +264,8 @@ Block InterpreterInsertQuery::getSampleBlock(
     /// Remote destinations negotiate the aggregate-state version with the peer. The guard below is
     /// only for local table metadata that can otherwise keep writing the legacy layout after upgrade.
     const bool check_legacy_state = !no_destination && !query.table_function && !table->isRemote();
+    if (check_legacy_state)
+        checkLegacyAggregateStateInsert(metadata_snapshot->getSampleBlock(), table);
 
     /// If the query does not include information about columns
     if (!query.columns)
@@ -271,10 +273,7 @@ Block InterpreterInsertQuery::getSampleBlock(
         if (no_destination)
             return metadata_snapshot->getSampleBlockWithVirtuals(VirtualsKind::All, VirtualsMaterializationPlace::All);
 
-        Block result = metadata_snapshot->getSampleBlockNonMaterialized();
-        if (check_legacy_state)
-            checkLegacyAggregateStateInsert(result, table);
-        return result;
+        return metadata_snapshot->getSampleBlockNonMaterialized();
     }
 
     /// Form the block based on the column names from the query
@@ -287,10 +286,7 @@ Block InterpreterInsertQuery::getSampleBlock(
         names.emplace_back(std::move(current_name));
     }
 
-    Block result = getSampleBlock(names, table, metadata_snapshot, no_destination, allow_materialized);
-    if (check_legacy_state)
-        checkLegacyAggregateStateInsert(result, table);
-    return result;
+    return getSampleBlock(names, table, metadata_snapshot, no_destination, allow_materialized);
 }
 
 Block InterpreterInsertQuery::getSampleBlock(
