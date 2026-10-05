@@ -163,9 +163,6 @@ size_t capMinBlockSizeBytesForMemoryLimit(size_t value)
     return value;
 }
 
-/// True when `target` is an Enum that contains `source` with the same in-memory width, i.e. `source`
-/// is a narrower Enum whose members are a subset of `target`. This mirrors the compatibility that
-/// StorageInMemoryMetadata::check allows but that is not type equality.
 bool hasLegacyUnversionedAggregateStateRequiringMigration(const DataTypePtr & type)
 {
     bool found = false;
@@ -214,6 +211,9 @@ void checkLegacyAggregateStateInsert(const StoragePtr & storage, const StorageMe
     }
 }
 
+/// True when `target` is an Enum that contains `source` with the same in-memory width, i.e. `source`
+/// is a narrower Enum whose members are a subset of `target`. This mirrors the compatibility that
+/// StorageInMemoryMetadata::check allows but that is not type equality.
 bool isWidenedEnumTarget(const IDataType & target, const IDataType & source)
 {
     if (const auto * enum_type = dynamic_cast<const IDataTypeEnum *>(&target))
