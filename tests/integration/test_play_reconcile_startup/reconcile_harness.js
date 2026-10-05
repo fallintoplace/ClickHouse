@@ -653,6 +653,79 @@ async function checkAuthHeaderTransport(js) {
             && !new URL(modernEmptyUserCalls[0].url).searchParams.has('password'),
         { modernEmptyUserCalls });
 
+    /// A pre-26.10 server does not understand X-Requested-With as an auth marker. If a proxy
+    /// rewrites Authorization, the old server reports mixed auth; that exact versioned failure
+    /// may retry the same raw credentials through the historical URL transport.
+    const legacyMixedAuthBody = 'Code: 516. DB::Exception: Invalid authentication: it is not allowed to use '
+        + 'X-ClickHouse HTTP headers and Authorization HTTP header simultaneously. '
+        + '(AUTHENTICATION_FAILED) (version 26.9.4.1 (official build))';
+
+    const legacyMixedCalls = [];
+    const legacyMixedHelpers = makeAuthHelpers(async (url, options) => {
+        const parsed = new URL(url);
+        legacyMixedCalls.push({ url, body: options.body, headers: options.headers });
+        if (!parsed.searchParams.has('user'))
+            return authResponse(403, { code: '516', body: legacyMixedAuthBody });
+        return authResponse(200, { version: '26.9.4.1' });
+    });
+    const legacyMixedResponse = await legacyMixedHelpers.fetchWithRequestAuth(
+        'https://remote.example/query?query_kind=main',
+        { method: 'POST', body: 'SELECT currentUser()' },
+        'https://remote.example/query', 'alice', 'secret');
+    check('auth-header-cases', 'legacy mixed auth retries raw credentials through URL',
+        legacyMixedResponse.ok
+            && legacyMixedCalls.length === 2
+            && legacyMixedCalls[0].headers['X-Requested-With'] === 'ClickHouse-Play'
+            && legacyMixedCalls[0].headers['X-ClickHouse-User'] === 'alice'
+            && !new URL(legacyMixedCalls[0].url).searchParams.has('user')
+            && legacyMixedCalls[1].headers.Authorization === 'never'
+            && legacyMixedCalls[1].headers['X-ClickHouse-User'] === undefined
+            && new URL(legacyMixedCalls[1].url).searchParams.get('user') === 'alice'
+            && new URL(legacyMixedCalls[1].url).searchParams.get('password') === 'secret',
+        { legacyMixedCalls });
+
+    const legacyMixedStatusCalls = [];
+    const legacyMixedStatusHelpers = makeAuthHelpers(async (url, options) => {
+        const parsed = new URL(url);
+        legacyMixedStatusCalls.push({ url, body: options.body, headers: options.headers });
+        if (!parsed.searchParams.has('user'))
+            return authResponse(403, { code: '516', body: legacyMixedAuthBody });
+        return authResponse(200, { version: '26.9.4.1' });
+    });
+    const legacyMixedStatus = await legacyMixedStatusHelpers.probeServerStatus(
+        'https://remote.example/query', 'alice', 'secret');
+    check('auth-header-cases', 'legacy mixed auth status probe retries through URL',
+        legacyMixedStatus
+            && legacyMixedStatus.status.v === '26.9.4.1'
+            && legacyMixedStatusCalls.length === 2
+            && !new URL(legacyMixedStatusCalls[0].url).searchParams.has('user')
+            && new URL(legacyMixedStatusCalls[1].url).searchParams.get('user') === 'alice'
+            && new URL(legacyMixedStatusCalls[1].url).searchParams.get('password') === 'secret',
+        { legacyMixedStatusCalls });
+
+    /// A matching mixed-auth message from a 26.10+ response is not legacy proof. This keeps
+    /// credentials out of URLs if an intermediary strips the marker on a current server.
+    const modernMixedCalls = [];
+    const modernMixedHelpers = makeAuthHelpers(async (url, options) => {
+        modernMixedCalls.push({ url, body: options.body, headers: options.headers });
+        return authResponse(403, {
+            code: '516',
+            body: 'Code: 516. DB::Exception: Invalid authentication: it is not allowed to use '
+                + 'X-ClickHouse HTTP headers and Authorization HTTP header simultaneously. '
+                + '(AUTHENTICATION_FAILED) (version 26.10.1.1 (official build))',
+        });
+    });
+    const modernMixedResponse = await modernMixedHelpers.fetchWithRequestAuth(
+        'https://remote.example/query?query_kind=main',
+        { method: 'POST', body: 'SELECT currentUser()' },
+        'https://remote.example/query', 'alice', 'secret');
+    check('auth-header-cases', 'modern mixed auth never falls back to URL credentials',
+        !modernMixedResponse.ok
+            && modernMixedCalls.length === 1
+            && !new URL(modernMixedCalls[0].url).searchParams.has('user')
+            && !new URL(modernMixedCalls[0].url).searchParams.has('password'),
+        { modernMixedCalls });
+
     /// A pre-26.7 server rejects X-ClickHouse-Key without a user before authentication. The
     /// same response must include a pre-26.7 version before the real request may retry through
     /// the historical password-only URL path. There is no separate credential-bearing probe.

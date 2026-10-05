@@ -8985,11 +8985,38 @@ async function responseProvesLegacyEncodedWebUIAuth(response) {
     }
 }
 
+async function responseProvesLegacyMixedAuth(response) {
+    if (response.headers.get('X-ClickHouse-Exception-Code') !== '516')
+        return false;
+
+    try {
+        const body = await response.clone().text();
+        const mixed_auth_message = 'Invalid authentication: it is not allowed to use '
+            + 'X-ClickHouse HTTP headers and Authorization HTTP header simultaneously';
+        if (!body.includes('DB::Exception') || !body.includes(mixed_auth_message))
+            return false;
+        const version_match = body.match(/\bversion\s+(\d+\.\d+(?:\.\d+){0,2})\b/i);
+        return version_match !== null && serverPredatesEncodedWebUIAuth(version_match[1]);
+    } catch (e) {
+        return false;
+    }
+}
+
 async function fetchWithRequestAuth(url, options, _server_address, user, password) {
     const send_raw = canSendRawAuthCredentials(user, password);
     let response = await fetch(url, { ...options, headers: getAuthHeaders(user, password) });
 
     if (send_raw) {
+        /// Servers before 26.10 do not recognize the scripted Web UI marker. If a proxy rewrites
+        /// Authorization, they reject otherwise valid raw X-ClickHouse credentials as mixed auth.
+        /// Retry the historical URL transport only when the response itself proves that exact
+        /// old-server failure, so unrelated authentication errors never put credentials in URLs.
+        if (await responseProvesLegacyMixedAuth(response)) {
+            return await fetch(
+                url + getLegacyAuthQueryParams(user, password),
+                { ...options, headers: { 'Authorization': 'never' } });
+        }
+
         /// Before 26.7 a password-only request implicitly meant user "default". Preserve that
         /// compatibility only when the original ClickHouse error itself proves a pre-26.7 server;
         /// never send a credential-bearing probe just to discover the server version.
@@ -9039,6 +9066,23 @@ async function probeServerStatus(server_address, user, password) {
         let response = await request(url, getAuthHeaders(user, password));
         if (response.ok)
             return { status: await response.json(), use_legacy_default_user: false };
+
+        /// Mirror the real-request fallback for pre-26.10 servers behind proxies that rewrite
+        /// Authorization. The versioned mixed-auth response is the proof that URL fallback is safe.
+        if (await responseProvesLegacyMixedAuth(response)) {
+            response = await request(
+                url + getLegacyAuthQueryParams(user, password),
+                { 'Authorization': 'never' });
+            if (!response.ok)
+                return false;
+
+            const legacy_status = await response.json();
+            return {
+                status: legacy_status,
+                use_legacy_default_user:
+                    !user && !!password && serverPredatesDefaultSessionUser(legacy_status.v),
+            };
+        }
 
         /// Before 26.7 X-ClickHouse-Key without a user was rejected before authentication.
         /// Only that exact old-server rejection may use the historical password-only URL path.
