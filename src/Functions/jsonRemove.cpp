@@ -478,6 +478,15 @@ public:
     }
 
     String getName() const override { return name; }
+
+    /// The captured parser settings decide whether constant JSONPaths are parsed or rejected,
+    /// see `IFunctionBase::updateHash`.
+    void updateHash(SipHash & hash) const override
+    {
+        hash.update(max_parser_depth);
+        hash.update(max_parser_backtracks);
+    }
+
     bool isVariadic() const override { return true; }
     size_t getNumberOfArguments() const override { return 0; }
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return true; }
