@@ -21,6 +21,7 @@ SELECT JSONRemove('{"drop":{"n":18446744073709551617},"keep":1844674407370955161
 SELECT JSONRemove('[18446744073709551617,18446744073709551618,3]', '$[0]') FORMAT TSV;
 SELECT JSONRemove('[{"n":18446744073709551617},18446744073709551618,18446744073709551619]', '$[0]', '$[1]') FORMAT TSV;
 SELECT JSONRemove(concat('{"huge":', repeat('9', 400), ',"keep":1}'), '$.huge') FORMAT TSV;
+SELECT JSONRemove(concat('{"keep":', repeat('9', 400), ',"drop":1}'), '$.drop') = concat('{"keep":', repeat('9', 400), '}') FORMAT TSV;
 SELECT JSONRemove(unhex('7B225C7530303631223A312C226B656570223A225C75303065395C2F227D'), '$.a') FORMAT TSV;
 SELECT JSONRemove(concat('{"a":', toString(number), '}'), '$.a') FROM numbers(3) FORMAT TSV;
 SELECT JSONRemove(data, '$.a')
