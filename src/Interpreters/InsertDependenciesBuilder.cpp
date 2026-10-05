@@ -166,8 +166,9 @@ size_t capMinBlockSizeBytesForMemoryLimit(size_t value)
 void checkLegacyAggregateStateInsert(const StoragePtr & storage, const StorageMetadataPtr & metadata)
 {
     /// Remote storages negotiate aggregate-state versions with the peer and must keep accepting
-    /// legacy states during rolling upgrades. Local sinks have no such negotiation boundary.
-    if (storage->isRemote())
+    /// legacy states during rolling upgrades. Memory stores the in-memory aggregate states directly
+    /// and never runs the lossy legacy serializer, so it is safe as well.
+    if (storage->isRemote() || storage->getName() == "Memory")
         return;
 
     for (const auto & column : metadata->getSampleBlock())
