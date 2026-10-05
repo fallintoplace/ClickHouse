@@ -16,16 +16,15 @@
 #include <Common/VectorWithMemoryTracking.h>
 #include "config.h"
 
+#include <string_view>
+#include <utility>
+
 #if USE_RAPIDJSON
 
 #define RAPIDJSON_PARSE_DEFAULT_FLAGS (kParseIterativeFlag)
 
-#include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
-#include <rapidjson/memorystream.h>
 #include <rapidjson/reader.h>
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/writer.h>
 
 namespace DB
 {
@@ -45,11 +44,6 @@ extern const int TOO_DEEP_RECURSION;
 
 namespace
 {
-using TrackedPoolAllocator = rapidjson::MemoryPoolAllocator<RapidJSONMemoryTrackerAllocator>;
-using TrackedValue = rapidjson::GenericValue<rapidjson::UTF8<char>, TrackedPoolAllocator>;
-using TrackedDocument = rapidjson::GenericDocument<rapidjson::UTF8<char>, TrackedPoolAllocator, RapidJSONMemoryTrackerAllocator>;
-using TrackedStringBuffer = rapidjson::GenericStringBuffer<rapidjson::UTF8<char>, RapidJSONMemoryTrackerAllocator>;
-using TrackedWriter = rapidjson::Writer<TrackedStringBuffer, rapidjson::UTF8<char>, rapidjson::UTF8<char>, RapidJSONMemoryTrackerAllocator>;
 using TrackedReader = rapidjson::GenericReader<rapidjson::UTF8<char>, rapidjson::UTF8<char>, RapidJSONMemoryTrackerAllocator>;
 
 constexpr size_t max_json_remove_depth = 1000;
@@ -70,143 +64,237 @@ struct PathStep
 using ParsedPath = VectorWithMemoryTracking<PathStep>;
 using ParsedPaths = VectorWithMemoryTracking<ParsedPath>;
 
-using JSONMetadataRef = UInt32;
-constexpr JSONMetadataRef json_number_ref_flag = JSONMetadataRef{1} << 31;
-
-struct JSONMetadataNode
+struct JSONSlice
 {
-    VectorWithMemoryTracking<JSONMetadataRef> children;
+    size_t offset = 0;
+    size_t length = 0;
 };
 
-struct JSONMetadata
+using JSONNodeIndex = size_t;
+
+struct JSONObjectMember
 {
-    VectorWithMemoryTracking<JSONMetadataNode> containers;
+    String name;
+    JSONSlice raw_name;
+    JSONNodeIndex value;
 };
 
-bool isContainerMetadataRef(JSONMetadataRef ref, const JSONMetadata & metadata)
+struct JSONNode
 {
-    return ref && !(ref & json_number_ref_flag) && ref <= metadata.containers.size();
-}
+    enum class Type
+    {
+        Scalar,
+        Object,
+        Array,
+    };
 
-struct NumberLexeme
-{
-    size_t offset;
-    rapidjson::SizeType length;
+    Type type = Type::Scalar;
+    JSONSlice raw_value;
+    VectorWithMemoryTracking<JSONObjectMember> members;
+    VectorWithMemoryTracking<JSONNodeIndex> elements;
 };
 
-struct NumberLexemes
-{
-    VectorWithMemoryTracking<char> data;
-    VectorWithMemoryTracking<NumberLexeme> entries;
-};
+using JSONNodes = VectorWithMemoryTracking<JSONNode>;
 
-class NumberCollector : public rapidjson::BaseReaderHandler<rapidjson::UTF8<char>, NumberCollector>
+/// RapidJSON keeps an optimized local copy of MemoryStream while parsing strings and numbers,
+/// so a SAX handler cannot observe its live cursor. This custom stream uses RapidJSON's default
+/// reference semantics and remembers the start of each string token, letting the handler point
+/// nodes directly at slices of the original JSON.
+class JSONInputStream
 {
 public:
-    NumberLexemes number_lexemes;
+    using Ch = char;
 
-    bool RawNumber(const char * value, rapidjson::SizeType length, bool)
+    explicit JSONInputStream(std::string_view data_)
+        : data(data_)
     {
-        const size_t offset = number_lexemes.data.size();
-        number_lexemes.data.insert(number_lexemes.data.end(), value, value + length);
-        number_lexemes.entries.push_back({offset, length});
-        return true;
     }
+
+    Ch Peek() const { return position == data.size() ? '\0' : data[position]; }
+
+    Ch Take()
+    {
+        if (position == data.size())
+            return '\0';
+
+        const size_t offset = position;
+        const Ch value = data[position++];
+        if (in_string)
+        {
+            if (escaped)
+                escaped = false;
+            else if (value == '\\')
+                escaped = true;
+            else if (value == '"')
+                in_string = false;
+        }
+        else if (value == '"')
+        {
+            in_string = true;
+            last_string_start = offset;
+        }
+
+        return value;
+    }
+
+    size_t Tell() const { return position; }
+    size_t getLastStringStart() const { return last_string_start; }
+
+    Ch * PutBegin() { return nullptr; }
+    void Put(Ch) { }
+    void Flush() { }
+    size_t PutEnd(Ch *) { return 0; }
+
+private:
+    std::string_view data;
+    size_t position = 0;
+    size_t last_string_start = 0;
+    bool in_string = false;
+    bool escaped = false;
 };
 
-NumberLexemes collectNumberLexemes(const StringRef & json)
+class JSONTreeBuilder : public rapidjson::BaseReaderHandler<rapidjson::UTF8<char>, JSONTreeBuilder>
 {
-    NumberCollector collector;
-    TrackedReader reader;
-    rapidjson::MemoryStream stream(json.data(), json.size());
-    const auto parse_result = reader.Parse<kParseIterativeFlag | kParseNumbersAsStringsFlag>(stream, collector);
-
-    if (parse_result.IsError())
-        throw Exception(
-            ErrorCodes::BAD_ARGUMENTS,
-            "Wrong JSON string passed to function JSONRemove: {}",
-            rapidjson::GetParseError_En(parse_result.Code()));
-
-    return std::move(collector.number_lexemes);
-}
-
-void buildJSONMetadata(
-    const TrackedValue & value,
-    JSONMetadata & metadata,
-    const NumberLexemes & number_lexemes,
-    size_t & number_index,
-    JSONMetadataRef & metadata_ref)
-{
-    if (value.IsObject())
+public:
+    JSONTreeBuilder(JSONInputStream & stream_, size_t max_depth_)
+        : stream(stream_)
+        , max_depth(max_depth_)
     {
-        if (metadata.containers.size() >= json_number_ref_flag - 1)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Too many JSON containers in function JSONRemove");
-
-        metadata.containers.emplace_back();
-        metadata_ref = static_cast<JSONMetadataRef>(metadata.containers.size());
-        metadata.containers.back().children.reserve(value.MemberCount());
-        for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it)
-        {
-            JSONMetadataRef child_ref = 0;
-            buildJSONMetadata(it->value, metadata, number_lexemes, number_index, child_ref);
-            metadata.containers[metadata_ref - 1].children.emplace_back(child_ref);
-        }
     }
-    else if (value.IsArray())
-    {
-        if (metadata.containers.size() >= json_number_ref_flag - 1)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Too many JSON containers in function JSONRemove");
 
-        metadata.containers.emplace_back();
-        metadata_ref = static_cast<JSONMetadataRef>(metadata.containers.size());
-        metadata.containers.back().children.reserve(value.Size());
-        for (const auto * it = value.Begin(); it != value.End(); ++it)
-        {
-            JSONMetadataRef child_ref = 0;
-            buildJSONMetadata(*it, metadata, number_lexemes, number_index, child_ref);
-            metadata.containers[metadata_ref - 1].children.emplace_back(child_ref);
-        }
+    bool Null()
+    {
+        addScalarFromEnd(4);
+        return true;
     }
-    else if (value.IsNumber())
-    {
-        if (number_index >= number_lexemes.entries.size())
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Unable to track JSON numbers in function JSONRemove");
-        if (number_index >= json_number_ref_flag - 1)
-            throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Too many JSON numbers in function JSONRemove");
 
-        metadata_ref = json_number_ref_flag | static_cast<JSONMetadataRef>(++number_index);
+    bool Bool(bool value)
+    {
+        addScalarFromEnd(value ? 4 : 5);
+        return true;
     }
-}
 
-void checkJSONDepth(const TrackedValue & root)
-{
-    VectorWithMemoryTracking<std::pair<const TrackedValue *, size_t>> to_visit;
-    to_visit.emplace_back(&root, 1);
-
-    while (!to_visit.empty())
+    bool RawNumber(const char *, rapidjson::SizeType length, bool)
     {
-        const auto [value, depth] = to_visit.back();
-        to_visit.pop_back();
+        addScalarFromEnd(length);
+        return true;
+    }
 
-        if (depth > max_json_remove_depth)
+    bool String(const char *, rapidjson::SizeType, bool)
+    {
+        checkValueDepth();
+        addNode(JSONNode::Type::Scalar, getRawStringSlice());
+        return true;
+    }
+
+    bool StartObject()
+    {
+        checkValueDepth();
+        const auto node = addNode(JSONNode::Type::Object, {});
+        stack.push_back({node, {}, {}});
+        return true;
+    }
+
+    bool Key(const char * value, rapidjson::SizeType length, bool)
+    {
+        auto & frame = stack.back();
+        frame.member_name.assign(value, length);
+        frame.raw_member_name = getRawStringSlice();
+        return true;
+    }
+
+    bool EndObject(rapidjson::SizeType)
+    {
+        stack.pop_back();
+        return true;
+    }
+
+    bool StartArray()
+    {
+        checkValueDepth();
+        const auto node = addNode(JSONNode::Type::Array, {});
+        stack.push_back({node, {}, {}});
+        return true;
+    }
+
+    bool EndArray(rapidjson::SizeType)
+    {
+        stack.pop_back();
+        return true;
+    }
+
+    JSONNodes releaseNodes() { return std::move(nodes); }
+    JSONNodeIndex getRoot() const { return root; }
+
+private:
+    struct ContainerFrame
+    {
+        JSONNodeIndex node;
+        String member_name;
+        JSONSlice raw_member_name;
+    };
+
+    using ContainerStack = VectorWithMemoryTracking<ContainerFrame>;
+
+    void checkValueDepth() const
+    {
+        const size_t depth = stack.size() + 1;
+        if (depth > max_depth)
             throw Exception(
                 ErrorCodes::TOO_DEEP_RECURSION,
-                "Too deep nesting in a JSON document passed to function "
-                "JSONRemove: the limit is {}",
-                max_json_remove_depth);
-
-        if (value->IsObject())
-        {
-            for (auto it = value->MemberBegin(); it != value->MemberEnd(); ++it)
-                to_visit.emplace_back(&it->value, depth + 1);
-        }
-        else if (value->IsArray())
-        {
-            for (const auto * it = value->Begin(); it != value->End(); ++it)
-                to_visit.emplace_back(&*it, depth + 1);
-        }
+                "Too deep nesting in a JSON document passed to function JSONRemove: the limit is {}",
+                max_depth);
     }
-}
+
+    JSONSlice getRawStringSlice() const
+    {
+        const size_t end_offset = stream.Tell();
+        const size_t start_offset = stream.getLastStringStart();
+        return {start_offset, end_offset - start_offset};
+    }
+
+    void addScalarFromEnd(size_t length)
+    {
+        checkValueDepth();
+        const size_t end_offset = stream.Tell();
+        addNode(JSONNode::Type::Scalar, {end_offset - length, length});
+    }
+
+    JSONNodeIndex addNode(JSONNode::Type type, JSONSlice raw_value)
+    {
+        JSONNode node;
+        node.type = type;
+        node.raw_value = raw_value;
+        nodes.push_back(std::move(node));
+
+        const auto node_index = nodes.size() - 1;
+        if (stack.empty())
+        {
+            root = node_index;
+            return node_index;
+        }
+
+        auto & frame = stack.back();
+        auto & parent = nodes[frame.node];
+        if (parent.type == JSONNode::Type::Object)
+        {
+            parent.members.push_back({std::move(frame.member_name), frame.raw_member_name, node_index});
+            frame.member_name.clear();
+        }
+        else
+        {
+            parent.elements.push_back(node_index);
+        }
+
+        return node_index;
+    }
+
+    JSONInputStream & stream;
+    const size_t max_depth;
+    JSONNodes nodes;
+    ContainerStack stack;
+    JSONNodeIndex root = 0;
+};
 
 ParsedPath parseJSONPath(const String & path, uint32_t parse_depth, uint32_t parse_backtracks)
 {
@@ -263,142 +351,105 @@ ParsedPath parseJSONPath(const String & path, uint32_t parse_depth, uint32_t par
     return result;
 }
 
-bool removeAtPath(TrackedValue & document, JSONMetadata & metadata, JSONMetadataRef root_metadata_ref, const ParsedPath & path)
+size_t findMember(const JSONNode & object, const String & name)
 {
-    TrackedValue * parent = &document;
-    JSONMetadataRef parent_metadata_ref = root_metadata_ref;
+    for (size_t i = 0; i < object.members.size(); ++i)
+    {
+        if (object.members[i].name == name)
+            return i;
+    }
+    return object.members.size();
+}
+
+bool removeAtPath(JSONNodes & nodes, JSONNodeIndex root, const ParsedPath & path)
+{
+    JSONNodeIndex parent_index = root;
 
     for (size_t i = 0; i + 1 < path.size(); ++i)
     {
         const auto & step = path[i];
+        const auto & parent = nodes[parent_index];
         if (step.type == PathStep::Type::Member)
         {
-            if (!parent->IsObject())
-                return false;
-            if (!isContainerMetadataRef(parent_metadata_ref, metadata))
+            if (parent.type != JSONNode::Type::Object)
                 return false;
 
-            TrackedValue key(rapidjson::StringRef(step.member_name.data(), step.member_name.size()));
-            auto member = parent->FindMember(key);
-            if (member == parent->MemberEnd())
+            const size_t member_index = findMember(parent, step.member_name);
+            if (member_index == parent.members.size())
                 return false;
 
-            const size_t child_index = static_cast<size_t>(member - parent->MemberBegin());
-
-            parent = &member->value;
-            parent_metadata_ref = metadata.containers[parent_metadata_ref - 1].children[child_index];
+            parent_index = parent.members[member_index].value;
         }
         else
         {
-            if (!parent->IsArray() || step.index >= parent->Size())
-                return false;
-            if (!isContainerMetadataRef(parent_metadata_ref, metadata))
+            if (parent.type != JSONNode::Type::Array || step.index >= parent.elements.size())
                 return false;
 
-            parent = &(*parent)[step.index];
-            parent_metadata_ref = metadata.containers[parent_metadata_ref - 1].children[step.index];
+            parent_index = parent.elements[step.index];
         }
     }
 
+    auto & parent = nodes[parent_index];
     const auto & target = path.back();
-
     if (target.type == PathStep::Type::Member)
     {
-        if (!parent->IsObject())
-            return false;
-        if (!isContainerMetadataRef(parent_metadata_ref, metadata))
+        if (parent.type != JSONNode::Type::Object)
             return false;
 
-        TrackedValue key(rapidjson::StringRef(target.member_name.data(), target.member_name.size()));
-        auto member = parent->FindMember(key);
-        if (member == parent->MemberEnd())
+        const size_t member_index = findMember(parent, target.member_name);
+        if (member_index == parent.members.size())
             return false;
 
-        const size_t child_index = static_cast<size_t>(member - parent->MemberBegin());
-
-        parent->EraseMember(member);
-        metadata.containers[parent_metadata_ref - 1].children.erase(
-            metadata.containers[parent_metadata_ref - 1].children.begin() + child_index);
+        parent.members.erase(parent.members.begin() + member_index);
         return true;
     }
 
-    if (!parent->IsArray() || target.index >= parent->Size())
-        return false;
-    if (!isContainerMetadataRef(parent_metadata_ref, metadata))
+    if (parent.type != JSONNode::Type::Array || target.index >= parent.elements.size())
         return false;
 
-    parent->Erase(parent->Begin() + target.index);
-    metadata.containers[parent_metadata_ref - 1].children.erase(
-        metadata.containers[parent_metadata_ref - 1].children.begin() + target.index);
+    parent.elements.erase(parent.elements.begin() + target.index);
     return true;
 }
 
-bool serializeJSON(
-    const TrackedValue & value,
-    JSONMetadataRef metadata_ref,
-    const JSONMetadata & metadata,
-    const NumberLexemes & number_lexemes,
-    TrackedWriter & writer)
+void appendSlice(String & output, std::string_view json, JSONSlice slice)
 {
-    if (metadata_ref & json_number_ref_flag)
+    output.append(json.data() + slice.offset, slice.length);
+}
+
+void serializeJSON(const JSONNodes & nodes, JSONNodeIndex node_index, std::string_view json, String & output)
+{
+    const auto & node = nodes[node_index];
+    if (node.type == JSONNode::Type::Scalar)
     {
-        if (!value.IsNumber())
-            return false;
-
-        const auto number_index = (metadata_ref & ~json_number_ref_flag) - 1;
-        if (number_index >= number_lexemes.entries.size())
-            return false;
-
-        const auto & number = number_lexemes.entries[number_index];
-        if (number.offset > number_lexemes.data.size() || number.length > number_lexemes.data.size() - number.offset)
-            return false;
-
-        return writer.RawValue(number_lexemes.data.data() + number.offset, number.length, rapidjson::kNumberType);
+        appendSlice(output, json, node.raw_value);
+        return;
     }
 
-    if (value.IsObject())
+    if (node.type == JSONNode::Type::Object)
     {
-        if (!isContainerMetadataRef(metadata_ref, metadata))
-            return false;
-
-        const auto & node = metadata.containers[metadata_ref - 1];
-        if (node.children.size() != value.MemberCount() || !writer.StartObject())
-            return false;
-
-        size_t child_index = 0;
-        for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it, ++child_index)
+        output.push_back('{');
+        for (size_t i = 0; i < node.members.size(); ++i)
         {
-            if (!writer.Key(it->name.GetString(), it->name.GetStringLength())
-                || !serializeJSON(it->value, node.children[child_index], metadata, number_lexemes, writer))
-                return false;
-        }
+            if (i)
+                output.push_back(',');
 
-        return writer.EndObject(value.MemberCount());
+            const auto & member = node.members[i];
+            appendSlice(output, json, member.raw_name);
+            output.push_back(':');
+            serializeJSON(nodes, member.value, json, output);
+        }
+        output.push_back('}');
+        return;
     }
 
-    if (value.IsArray())
+    output.push_back('[');
+    for (size_t i = 0; i < node.elements.size(); ++i)
     {
-        if (!isContainerMetadataRef(metadata_ref, metadata))
-            return false;
-
-        const auto & node = metadata.containers[metadata_ref - 1];
-        if (node.children.size() != value.Size() || !writer.StartArray())
-            return false;
-
-        size_t child_index = 0;
-        for (const auto * it = value.Begin(); it != value.End(); ++it, ++child_index)
-        {
-            if (!serializeJSON(*it, node.children[child_index], metadata, number_lexemes, writer))
-                return false;
-        }
-
-        return writer.EndArray(value.Size());
+        if (i)
+            output.push_back(',');
+        serializeJSON(nodes, node.elements[i], json, output);
     }
-
-    if (value.IsNumber() || metadata_ref)
-        return false;
-
-    return value.Accept(writer);
+    output.push_back(']');
 }
 
 class FunctionJSONRemove final : public IFunction
@@ -466,36 +517,30 @@ public:
         for (size_t row = 0; row < rows_to_process; ++row)
         {
             const auto json = json_column->getDataAt(json_is_const ? 0 : row);
-            auto number_lexemes = collectNumberLexemes(json);
+            /// RapidJSON uses '\0' as the end-of-stream marker, so accepting an embedded NUL would
+            /// silently ignore the suffix after it instead of reporting trailing invalid JSON.
+            if (json.contains('\0'))
+                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Invalid JSON string in function {}: embedded NULL byte", getName());
 
-            TrackedPoolAllocator allocator;
-            TrackedDocument document(&allocator);
-            document.Parse(json.data, json.size);
-
-            if (document.HasParseError())
+            JSONInputStream stream(json);
+            JSONTreeBuilder builder(stream, max_json_remove_depth);
+            TrackedReader reader;
+            const auto parse_result = reader.Parse<kParseIterativeFlag | kParseNumbersAsStringsFlag>(stream, builder);
+            if (parse_result.IsError())
                 throw Exception(
                     ErrorCodes::BAD_ARGUMENTS,
                     "Wrong JSON string passed to function JSONRemove: {}",
-                    rapidjson::GetParseError_En(document.GetParseError()));
+                    rapidjson::GetParseError_En(parse_result.Code()));
 
-            checkJSONDepth(document);
-            JSONMetadata metadata;
-            size_t number_index = 0;
-            JSONMetadataRef root_metadata_ref = 0;
-            buildJSONMetadata(document, metadata, number_lexemes, number_index, root_metadata_ref);
-
-            if (number_index != number_lexemes.entries.size())
-                throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Unable to track JSON numbers in function JSONRemove");
-
+            const auto root = builder.getRoot();
+            auto nodes = builder.releaseNodes();
             for (const auto & path : paths)
-                removeAtPath(document, metadata, root_metadata_ref, path);
+                removeAtPath(nodes, root, path);
 
-            TrackedStringBuffer buffer;
-            TrackedWriter writer(buffer);
-            if (!serializeJSON(document, root_metadata_ref, metadata, number_lexemes, writer))
-                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Unable to serialize JSON string in function JSONRemove");
-
-            result->insertData(buffer.GetString(), buffer.GetSize());
+            String output;
+            output.reserve(json.size());
+            serializeJSON(nodes, root, json, output);
+            result->insertData(output.data(), output.size());
         }
 
         if (json_is_const)
