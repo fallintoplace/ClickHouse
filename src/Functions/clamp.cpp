@@ -24,6 +24,13 @@ namespace ErrorCodes
 
 class FunctionClamp final : public IFunction
 {
+    struct ConvertedColumn
+    {
+        ColumnPtr column = nullptr;
+        bool is_const = false;
+    };
+
+    using ConvertedColumns = std::array<ConvertedColumn, 3>;
 
 public:
     static constexpr auto name = "clamp";
@@ -44,13 +51,7 @@ public:
 
     ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type, size_t input_rows_count) const override
     {
-        struct ConvertedColumn
-        {
-            ColumnPtr column = nullptr;
-            bool is_const = false;
-        };
-
-        std::array<ConvertedColumn, 3> converted_columns;
+        ConvertedColumns converted_columns;
         bool has_const_column = false;
         for (size_t arg = 0; arg < arguments.size(); ++arg)
         {
@@ -134,7 +135,7 @@ private:
     /// Vectorized clamp for numeric arguments. NULLs are handled by the default implementation,
     /// so only plain ColumnVector columns can appear here.
     /// Returns nullptr if the result type is not a plain number.
-    static ColumnPtr executeNumeric(const Columns & columns, const DataTypePtr & result_type, size_t input_rows_count)
+    static ColumnPtr executeNumeric(const ConvertedColumns & columns, const DataTypePtr & result_type, size_t input_rows_count)
     {
         ColumnPtr res;
         castTypeToEither<
@@ -152,11 +153,11 @@ private:
     }
 
     template <typename T>
-    static ColumnPtr executeNumericImpl(const Columns & columns, size_t input_rows_count)
+    static ColumnPtr executeNumericImpl(const ConvertedColumns & columns, size_t input_rows_count)
     {
-        const auto * value_column = checkAndGetColumn<ColumnVector<T>>(columns[0].get());
-        const auto * min_column = checkAndGetColumn<ColumnVector<T>>(columns[1].get());
-        const auto * max_column = checkAndGetColumn<ColumnVector<T>>(columns[2].get());
+        const auto * value_column = checkAndGetColumn<ColumnVector<T>>(columns[0].column.get());
+        const auto * min_column = checkAndGetColumn<ColumnVector<T>>(columns[1].column.get());
+        const auto * max_column = checkAndGetColumn<ColumnVector<T>>(columns[2].column.get());
         if (!value_column || !min_column || !max_column)
             return nullptr;
 
@@ -164,17 +165,42 @@ private:
         const T * mins = min_column->getData().data();
         const T * maxs = max_column->getData().data();
 
-        /// The bounds check is hoisted out of the main loop so the latter stays branch-free.
+        if (!columns[0].is_const && !columns[1].is_const && !columns[2].is_const)
+        {
+            /// The bounds check is hoisted out of the main loop so the latter stays branch-free.
+            bool have_invalid_bounds = false;
+            for (size_t i = 0; i < input_rows_count; ++i)
+                have_invalid_bounds |= greaterAt(mins[i], maxs[i]);
+            if (have_invalid_bounds)
+                throw Exception(ErrorCodes::BAD_ARGUMENTS, "The minimum value cannot be greater than the maximum value for function {}", name);
+
+            auto res = ColumnVector<T>::create(input_rows_count);
+            T * out = res->getData().data();
+            for (size_t i = 0; i < input_rows_count; ++i)
+                out[i] = greaterAt(mins[i], values[i]) ? mins[i] : (greaterAt(values[i], maxs[i]) ? maxs[i] : values[i]);
+
+            return res;
+        }
+
         bool have_invalid_bounds = false;
         for (size_t i = 0; i < input_rows_count; ++i)
-            have_invalid_bounds |= greaterAt(mins[i], maxs[i]);
+        {
+            const size_t min_row = columns[1].is_const ? 0 : i;
+            const size_t max_row = columns[2].is_const ? 0 : i;
+            have_invalid_bounds |= greaterAt(mins[min_row], maxs[max_row]);
+        }
         if (have_invalid_bounds)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "The minimum value cannot be greater than the maximum value for function {}", name);
 
         auto res = ColumnVector<T>::create(input_rows_count);
         T * out = res->getData().data();
         for (size_t i = 0; i < input_rows_count; ++i)
-            out[i] = greaterAt(mins[i], values[i]) ? mins[i] : (greaterAt(values[i], maxs[i]) ? maxs[i] : values[i]);
+        {
+            const T value = values[columns[0].is_const ? 0 : i];
+            const T min = mins[columns[1].is_const ? 0 : i];
+            const T max = maxs[columns[2].is_const ? 0 : i];
+            out[i] = greaterAt(min, value) ? min : (greaterAt(value, max) ? max : value);
+        }
 
         return res;
     }
