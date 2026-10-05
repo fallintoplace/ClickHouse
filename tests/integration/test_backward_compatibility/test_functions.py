@@ -226,7 +226,7 @@ def test_single_value_or_null_native_compatibility(start_cluster):
             SELECT singleValueOrNullState(toUInt64(42))
             """
         )
-        assert upstream.query(f"SELECT toTypeName(state) FROM {upstream_table}").strip() == "AggregateFunction(singleValueOrNull, UInt64)"
+        assert upstream.query(f"SELECT toTypeName(state) FROM {upstream_table}").strip() == "AggregateFunction(0, singleValueOrNull, UInt64)"
         assert upstream.query(f"SELECT isNull(singleValueOrNullMerge(state)) FROM {upstream_table}").strip() == "1"
     finally:
         backward.query(f"DROP TABLE IF EXISTS {backward_table}")
