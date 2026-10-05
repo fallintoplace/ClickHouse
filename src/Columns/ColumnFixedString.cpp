@@ -307,7 +307,6 @@ void ColumnFixedString::doInsertRangeFrom(const IColumn & src, size_t start, siz
     memcpy(chars.data() + old_size, &src_concrete.chars[start * n], length * n);
 }
 
-
 ColumnPtr ColumnFixedString::filter(const IColumn::Filter & filt, ssize_t result_size_hint) const
 {
     size_t col_size = size();
