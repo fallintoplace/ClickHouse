@@ -14,6 +14,7 @@ SELECT JSONRemove('[0,1,2]', '$[1 to 2]') FORMAT TSV;
 SELECT JSON_REMOVE('[0,1,2]', '$[1]') FORMAT TSV;
 SELECT JSONRemove('42', '$.a') FORMAT TSV;
 SELECT JSONRemove(' { "a" : 1 } ', '$.missing') FORMAT TSV;
+SELECT JSONRemove('{"a":1,"a":2,"b":3}', '$.a') FORMAT TSV;
 SELECT JSONRemove('{"big":18446744073709551617,"a":1,"exp":1e+308,"text":"18446744073709551617"}', '$.a') FORMAT TSV;
 SELECT JSONRemove('{"drop":2,"neg_zero":-0,"decimal":1.00,"exp":1e-2}', '$.drop') FORMAT TSV;
 SELECT JSONRemove('{"a":0,"nested":[1.00,{"keep":1e-2,"drop":2}]}', '$.nested[1].drop') FORMAT TSV;

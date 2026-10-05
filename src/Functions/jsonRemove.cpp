@@ -396,12 +396,24 @@ bool removeAtPath(JSONNodes & nodes, JSONNodeIndex root, const ParsedPath & path
         if (parent.type != JSONNode::Type::Object)
             return false;
 
-        const size_t member_index = findMember(parent, target.member_name);
-        if (member_index == parent.members.size())
-            return false;
+        size_t write_index = 0;
+        bool removed = false;
+        for (size_t read_index = 0; read_index < parent.members.size(); ++read_index)
+        {
+            if (parent.members[read_index].name == target.member_name)
+            {
+                removed = true;
+                continue;
+            }
 
-        parent.members.erase(parent.members.begin() + member_index);
-        return true;
+            if (write_index != read_index)
+                parent.members[write_index] = std::move(parent.members[read_index]);
+            ++write_index;
+        }
+
+        if (removed)
+            parent.members.resize(write_index);
+        return removed;
     }
 
     if (parent.type != JSONNode::Type::Array || target.index >= parent.elements.size())
@@ -411,12 +423,13 @@ bool removeAtPath(JSONNodes & nodes, JSONNodeIndex root, const ParsedPath & path
     return true;
 }
 
-void appendSlice(String & output, std::string_view json, JSONSlice slice)
+void appendSlice(ColumnString::Chars & output, std::string_view json, JSONSlice slice)
 {
-    output.append(json.data() + slice.offset, slice.length);
+    const auto * begin = reinterpret_cast<const UInt8 *>(json.data() + slice.offset);
+    output.insert(begin, begin + slice.length);
 }
 
-void serializeJSON(const JSONNodes & nodes, JSONNodeIndex node_index, std::string_view json, String & output)
+void serializeJSON(const JSONNodes & nodes, JSONNodeIndex node_index, std::string_view json, ColumnString::Chars & output)
 {
     const auto & node = nodes[node_index];
     if (node.type == JSONNode::Type::Scalar)
@@ -513,6 +526,10 @@ public:
         if (!input_rows_count)
             return result;
 
+        auto & result_chars = result->getChars();
+        auto & result_offsets = result->getOffsets();
+        result_chars.reserve_exact(json_is_const ? json_column->getDataAt(0).size() : json_column->getChars().size());
+
         const size_t rows_to_process = json_is_const ? 1 : input_rows_count;
         for (size_t row = 0; row < rows_to_process; ++row)
         {
@@ -525,7 +542,8 @@ public:
             JSONInputStream stream(json);
             JSONTreeBuilder builder(stream, max_json_remove_depth);
             TrackedReader reader;
-            const auto parse_result = reader.Parse<kParseIterativeFlag | kParseNumbersAsStringsFlag>(stream, builder);
+            const auto parse_result
+                = reader.Parse<rapidjson::kParseIterativeFlag | rapidjson::kParseNumbersAsStringsFlag>(stream, builder);
             if (parse_result.IsError())
                 throw Exception(
                     ErrorCodes::BAD_ARGUMENTS,
@@ -537,10 +555,8 @@ public:
             for (const auto & path : paths)
                 removeAtPath(nodes, root, path);
 
-            String output;
-            output.reserve(json.size());
-            serializeJSON(nodes, root, json, output);
-            result->insertData(output.data(), output.size());
+            serializeJSON(nodes, root, json, result_chars);
+            result_offsets.push_back(result_chars.size());
         }
 
         if (json_is_const)
@@ -559,14 +575,16 @@ REGISTER_FUNCTION(JSONRemove)
 {
     FunctionDocumentation::Description description = R"(
 Removes one or more object members or array elements from a JSON string using JSONPath.
-Each path must select exactly one member or element. Paths are applied from left to right. Missing paths do not change the JSON document.
+Each path must target one object member name or array element. Paths are applied from left to right.
+All object members with the targeted name are removed. Missing paths do not remove any values.
+The result is compacted. Invalid JSON causes an exception.
         )";
     FunctionDocumentation::Syntax syntax = "JSONRemove(json, path[, path ...])";
     FunctionDocumentation::Arguments arguments
         = {{"json", "A string containing valid JSON.", {"String"}},
            {"path[, path ...]",
             "One or more constant strings containing JSONPath expressions. Each "
-            "path must select one object member or array element.",
+            "path must target one object member name or array element.",
             {"String"}}};
     FunctionDocumentation::ReturnedValue returned_value = {"Returns the JSON document as a compact string.", {"String"}};
     FunctionDocumentation::Examples examples
