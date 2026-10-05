@@ -1,7 +1,3 @@
--- Tags: no-replicated-database
--- Tag no-replicated-database: version 0 is not printed in the type name, so the legacy state pin
--- does not survive re-parsing the CREATE query from the replicated database DDL log.
-
 DROP TABLE IF EXISTS single_value_or_null_state_serialization;
 
 CREATE TABLE single_value_or_null_state_serialization
