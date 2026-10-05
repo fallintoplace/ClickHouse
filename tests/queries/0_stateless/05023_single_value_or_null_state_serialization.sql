@@ -125,3 +125,46 @@ SELECT singleValueOrNullMerge(state)
 FROM single_value_or_null_legacy_unversioned;
 
 DROP TABLE single_value_or_null_legacy_unversioned;
+
+DROP TABLE IF EXISTS single_value_or_null_tuple_legacy_unversioned;
+
+CREATE TABLE single_value_or_null_tuple_legacy_unversioned
+(
+    id UInt8,
+    state AggregateFunction(singleValueOrNullTuple, Tuple(UInt64, UInt64))
+)
+ENGINE = MergeTree
+ORDER BY id;
+
+-- Restating the tuple type without a version simulates metadata written before singleValueOrNull state versioning.
+ALTER TABLE single_value_or_null_tuple_legacy_unversioned
+    MODIFY COLUMN state AggregateFunction(singleValueOrNullTuple, Tuple(UInt64, UInt64));
+
+DETACH TABLE single_value_or_null_tuple_legacy_unversioned;
+ATTACH TABLE single_value_or_null_tuple_legacy_unversioned;
+
+SELECT type
+FROM system.columns
+WHERE database = currentDatabase()
+    AND table = 'single_value_or_null_tuple_legacy_unversioned'
+    AND name = 'state';
+
+INSERT INTO single_value_or_null_tuple_legacy_unversioned
+SELECT 1, singleValueOrNullTupleState(tuple(toUInt64(42), toUInt64(43))); -- { serverError ILLEGAL_COLUMN }
+
+ALTER TABLE single_value_or_null_tuple_legacy_unversioned
+    MODIFY COLUMN state AggregateFunction(1, singleValueOrNullTuple, Tuple(UInt64, UInt64));
+
+INSERT INTO single_value_or_null_tuple_legacy_unversioned
+SELECT 1, singleValueOrNullTupleState(tuple(toUInt64(42), toUInt64(43)));
+
+SELECT type
+FROM system.columns
+WHERE database = currentDatabase()
+    AND table = 'single_value_or_null_tuple_legacy_unversioned'
+    AND name = 'state';
+
+SELECT singleValueOrNullTupleMerge(state)
+FROM single_value_or_null_tuple_legacy_unversioned;
+
+DROP TABLE single_value_or_null_tuple_legacy_unversioned;
