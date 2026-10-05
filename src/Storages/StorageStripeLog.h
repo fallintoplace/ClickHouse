@@ -99,6 +99,9 @@ private:
     /// in `sizes.json`, removes that registration and the file, so the table keeps its previous set of files.
     void unregisterSchemaHistoryFileIfAdded(bool registered_before, const WriteLock &);
 
+    /// Recomputes `common_column_prefix_size` from `schema_history`.
+    void updateCommonColumnPrefixSize(const WriteLock &);
+
     /// Saves the index file.
     void saveIndices(const WriteLock &);
 
@@ -143,6 +146,9 @@ private:
     IndexForNativeFormat indices;
     /// (exclusive block end, physical column count) segments written before the current schema.
     std::vector<std::pair<size_t, size_t>> schema_history;
+    /// Number of leading physical columns present in every block, or 0 if every block has all columns.
+    /// Readable without `rwlock` to choose the column for row counting.
+    std::atomic<size_t> common_column_prefix_size = 0;
     std::atomic<bool> indices_loaded = false;
     size_t num_indices_saved = 0;
 

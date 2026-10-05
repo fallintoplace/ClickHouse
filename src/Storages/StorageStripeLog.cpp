@@ -524,6 +524,10 @@ StorageStripeLog::StorageStripeLog(
     }
 
     total_bytes = file_checker.getFileSize(data_file_path) + file_checker.getFileSize(index_file_path);
+
+    /// Until the schema history is loaded, only the first column is known to be present in every block.
+    if (file_checker.contains(schema_history_file_path))
+        common_column_prefix_size = 1;
 }
 
 
@@ -612,6 +616,7 @@ void StorageStripeLog::alter(
             file_checker.repair();
             unregisterSchemaHistoryFileIfAdded(history_file_registered_before_append, lock);
             schema_history.resize(history_size_before_append);
+            updateCommonColumnPrefixSize(lock);
             throw;
         }
     }
@@ -622,11 +627,18 @@ void StorageStripeLog::alter(
 
 std::optional<NameAndTypePair> StorageStripeLog::getColumnForRowCount(const StorageSnapshotPtr & storage_snapshot) const
 {
-    const auto & all_physical = storage_snapshot->metadata->getColumns().getAllPhysical();
+    /// Without schema history every block contains every column, so the generic heuristic applies.
+    const size_t prefix_size = common_column_prefix_size.load();
+    if (prefix_size == 0)
+        return {};
+
+    const auto all_physical = storage_snapshot->metadata->getColumns().getAllPhysical();
     if (all_physical.empty())
         return {};
 
-    return all_physical.front();
+    /// Columns are only appended, so the first `prefix_size` columns are present in every block.
+    NamesAndTypesList common_columns(all_physical.begin(), std::next(all_physical.begin(), std::min(prefix_size, all_physical.size())));
+    return ExpressionActions::getSmallestColumn(common_columns);
 }
 
 
@@ -771,6 +783,7 @@ void StorageStripeLog::truncate(const ASTPtr &, const StorageMetadataPtr &, Cont
     file_checker.remove(schema_history_file_path);
 
     schema_history.clear();
+    updateCommonColumnPrefixSize(lock);
     indices_loaded = true;
     num_indices_saved = 0;
     total_rows = 0;
@@ -817,11 +830,14 @@ void StorageStripeLog::loadIndices(const WriteLock & lock /* already locked excl
 }
 
 
-void StorageStripeLog::loadSchemaHistory(const WriteLock & /* already locked for writing */)
+void StorageStripeLog::loadSchemaHistory(const WriteLock & lock)
 {
     schema_history.clear();
     if (!disk->existsFile(schema_history_file_path))
+    {
+        updateCommonColumnPrefixSize(lock);
         return;
+    }
 
     auto in = disk->readFile(
         schema_history_file_path,
@@ -835,13 +851,14 @@ void StorageStripeLog::loadSchemaHistory(const WriteLock & /* already locked for
         if (block_end > indices.blocks.size() || column_count > current_column_count)
             throw Exception(ErrorCodes::INCORRECT_INDEX, "StripeLog schema history is inconsistent with the current table");
     }
+    updateCommonColumnPrefixSize(lock);
 }
 
 
 void StorageStripeLog::appendSchemaHistoryBoundary(
     size_t block_end,
     size_t column_count,
-    const WriteLock & /* already locked for writing */)
+    const WriteLock & lock)
 {
     if (block_end == 0)
         return;
@@ -872,6 +889,16 @@ void StorageStripeLog::appendSchemaHistoryBoundary(
     out->finalize();
 
     schema_history.emplace_back(block_end, column_count);
+    updateCommonColumnPrefixSize(lock);
+}
+
+
+void StorageStripeLog::updateCommonColumnPrefixSize(const WriteLock & /* already locked for writing */)
+{
+    size_t prefix_size = 0;
+    for (const auto & [block_end, column_count] : schema_history)
+        prefix_size = prefix_size == 0 ? column_count : std::min(prefix_size, column_count);
+    common_column_prefix_size = prefix_size;
 }
 
 
@@ -1193,6 +1220,7 @@ void StorageStripeLog::restoreDataImpl(const BackupPtr & backup, const String & 
         unregisterSchemaHistoryFileIfAdded(history_file_registered_before_restore, lock);
         removeUnsavedIndices(lock);
         schema_history = schema_history_before_restore;
+        updateCommonColumnPrefixSize(lock);
         throw;
     }
 }
