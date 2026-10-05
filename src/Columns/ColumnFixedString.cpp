@@ -308,15 +308,6 @@ void ColumnFixedString::doInsertRangeFrom(const IColumn & src, size_t start, siz
 }
 
 
-static inline UInt64 blsr(UInt64 mask)
-{
-#ifdef __BMI__
-    return _blsr_u64(mask);
-#else
-    return mask & (mask - 1);
-#endif
-}
-
 ColumnPtr ColumnFixedString::filter(const IColumn::Filter & filt, ssize_t result_size_hint) const
 {
     size_t col_size = size();
@@ -362,7 +353,7 @@ ColumnPtr ColumnFixedString::filter(const IColumn::Filter & filt, ssize_t result
                     res->chars.resize(res_chars_size + n);
                     memcpySmallAllowReadWriteOverflow15(&res->chars[res_chars_size], data_pos + index * n, n);
                     res_chars_size += n;
-                    mask = blsr(mask);
+                    mask &= mask - 1;
                     continue;
                 }
 
@@ -439,7 +430,7 @@ void ColumnFixedString::filter(const IColumn::Filter & filt)
                 {
                     memmove(res_data_pos + res_chars_size, data_pos + index * n, n);
                     res_chars_size += n;
-                    mask = blsr(mask);
+                    mask &= mask - 1;
                     continue;
                 }
 
