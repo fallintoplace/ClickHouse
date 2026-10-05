@@ -23,6 +23,9 @@ private:
     DataTypes argument_types;
     Array parameters;
     std::optional<size_t> version;
+    /// Protocol downgrades can pin state version 0 for serialization while keeping the legacy
+    /// unversioned type spelling for peers that predate AggregateFunction version syntax.
+    bool print_explicit_zero_in_name;
 
     String getNameImpl(bool with_version) const;
 
@@ -30,7 +33,8 @@ public:
     static constexpr bool is_parametric = true;
 
     DataTypeAggregateFunction(AggregateFunctionPtr function_, const DataTypes & argument_types_,
-                              const Array & parameters_, std::optional<size_t> version_ = std::nullopt);
+                              const Array & parameters_, std::optional<size_t> version_ = std::nullopt,
+                              bool print_explicit_zero_in_name_ = true);
 
     size_t getVersion() const;
 
@@ -106,8 +110,14 @@ public:
 /// before new writes is also left unpinned while it still resolves to the function's default version,
 /// so metadata loaders can distinguish it from an explicit version 0 declaration. The nested types are
 /// replaced rather than modified in place, because a type object is typically shared - notably with
-/// the table metadata a block was read from.
-void setVersionToAggregateFunctions(DataTypePtr & type, bool if_empty, std::optional<size_t> revision = std::nullopt);
+/// the table metadata a block was read from. `print_explicit_zero_in_name` is false only for negotiated
+/// peers that predate aggregate-function version syntax: their payload is still pinned to v0, but the
+/// announced type keeps the legacy unversioned spelling.
+void setVersionToAggregateFunctions(
+    DataTypePtr & type,
+    bool if_empty,
+    std::optional<size_t> revision = std::nullopt,
+    bool print_explicit_zero_in_name = true);
 
 /// For a freshly declared column type (`CREATE TABLE`): pins the state version the current server
 /// revision maps to, but only where that version is newer than the default the function would fall
