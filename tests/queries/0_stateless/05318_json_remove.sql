@@ -40,6 +40,9 @@ FROM
 )
 FORMAT TSV;
 SELECT JSONRemove('{}', CAST(NULL AS Nullable(String))) FORMAT TSV;
+SELECT JSONRemove(unhex('7B2261223A312C225C7530303631223A322C2262223A337D'), '$.a') FORMAT TSV;
+WITH concat(repeat('[', 1001), '0', repeat(']', 1001)) AS json
+SELECT JSONRemove(json, '$.missing') = json FORMAT TSV;
 
 SELECT JSONRemove('[0,1,2]', '$') FORMAT TSV; -- { serverError BAD_ARGUMENTS }
 SELECT JSONRemove('[0,1,2]', '$[*]') FORMAT TSV; -- { serverError BAD_ARGUMENTS }
@@ -49,6 +52,5 @@ SELECT JSONRemove('[0,1,2]', '$[') FORMAT TSV; -- { serverError BAD_ARGUMENTS }
 SELECT JSONRemove('{', '$.a') FORMAT TSV; -- { serverError BAD_ARGUMENTS }
 SELECT JSONRemove('{"a":1} {"b":2}', '$.x') FORMAT TSV; -- { serverError BAD_ARGUMENTS }
 SELECT JSONRemove('[]', concat('$[', toString(number), ']')) FROM numbers(1) FORMAT TSV; -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
-SELECT JSONRemove(concat(repeat('[', 1001), '0', repeat(']', 1001)), '$[0]') FORMAT TSV; -- { serverError TOO_DEEP_RECURSION }
 -- Embedded NUL bytes must not silently truncate the input.
 SELECT JSONRemove(concat('{"a":1}', char(0), '{"b":2}'), '$.x') FORMAT TSV; -- { serverError BAD_ARGUMENTS }

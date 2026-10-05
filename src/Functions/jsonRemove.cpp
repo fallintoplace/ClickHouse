@@ -39,14 +39,11 @@ namespace ErrorCodes
 extern const int BAD_ARGUMENTS;
 extern const int ILLEGAL_COLUMN;
 extern const int ILLEGAL_TYPE_OF_ARGUMENT;
-extern const int TOO_DEEP_RECURSION;
 } // namespace ErrorCodes
 
 namespace
 {
 using TrackedReader = rapidjson::GenericReader<rapidjson::UTF8<char>, rapidjson::UTF8<char>, RapidJSONMemoryTrackerAllocator>;
-
-constexpr size_t max_json_remove_depth = 1000;
 
 struct PathStep
 {
@@ -156,9 +153,8 @@ private:
 class JSONTreeBuilder : public rapidjson::BaseReaderHandler<rapidjson::UTF8<char>, JSONTreeBuilder>
 {
 public:
-    JSONTreeBuilder(JSONInputStream & stream_, size_t max_depth_)
+    explicit JSONTreeBuilder(JSONInputStream & stream_)
         : stream(stream_)
-        , max_depth(max_depth_)
     {
     }
 
@@ -182,14 +178,12 @@ public:
 
     bool String(const char *, rapidjson::SizeType, bool)
     {
-        checkValueDepth();
         addNode(JSONNode::Type::Scalar, getRawStringSlice());
         return true;
     }
 
     bool StartObject()
     {
-        checkValueDepth();
         const auto node = addNode(JSONNode::Type::Object, {});
         stack.push_back({node, {}, {}});
         return true;
@@ -211,7 +205,6 @@ public:
 
     bool StartArray()
     {
-        checkValueDepth();
         const auto node = addNode(JSONNode::Type::Array, {});
         stack.push_back({node, {}, {}});
         return true;
@@ -236,16 +229,6 @@ private:
 
     using ContainerStack = VectorWithMemoryTracking<ContainerFrame>;
 
-    void checkValueDepth() const
-    {
-        const size_t depth = stack.size() + 1;
-        if (depth > max_depth)
-            throw Exception(
-                ErrorCodes::TOO_DEEP_RECURSION,
-                "Too deep nesting in a JSON document passed to function JSONRemove: the limit is {}",
-                max_depth);
-    }
-
     JSONSlice getRawStringSlice() const
     {
         const size_t end_offset = stream.Tell();
@@ -255,7 +238,6 @@ private:
 
     void addScalarFromEnd(size_t length)
     {
-        checkValueDepth();
         const size_t end_offset = stream.Tell();
         addNode(JSONNode::Type::Scalar, {end_offset - length, length});
     }
@@ -290,7 +272,6 @@ private:
     }
 
     JSONInputStream & stream;
-    const size_t max_depth;
     JSONNodes nodes;
     ContainerStack stack;
     JSONNodeIndex root = 0;
@@ -429,40 +410,69 @@ void appendSlice(ColumnString::Chars & output, std::string_view json, JSONSlice 
     output.insert(begin, begin + slice.length);
 }
 
+struct JSONSerializationFrame
+{
+    JSONNodeIndex node;
+    size_t next_child = 0;
+    bool started = false;
+};
+
 void serializeJSON(const JSONNodes & nodes, JSONNodeIndex node_index, std::string_view json, ColumnString::Chars & output)
 {
-    const auto & node = nodes[node_index];
-    if (node.type == JSONNode::Type::Scalar)
-    {
-        appendSlice(output, json, node.raw_value);
-        return;
-    }
+    /// Keep serialization off the C++ call stack so deeply nested valid JSON is limited by memory,
+    /// like the iterative RapidJSON parser above.
+    VectorWithMemoryTracking<JSONSerializationFrame> stack;
+    stack.push_back({node_index});
 
-    if (node.type == JSONNode::Type::Object)
+    while (!stack.empty())
     {
-        output.push_back('{');
-        for (size_t i = 0; i < node.members.size(); ++i)
+        auto & frame = stack.back();
+        const auto & node = nodes[frame.node];
+
+        if (node.type == JSONNode::Type::Scalar)
         {
-            if (i)
+            appendSlice(output, json, node.raw_value);
+            stack.pop_back();
+            continue;
+        }
+
+        if (!frame.started)
+        {
+            output.push_back(node.type == JSONNode::Type::Object ? '{' : '[');
+            frame.started = true;
+        }
+
+        if (node.type == JSONNode::Type::Object)
+        {
+            if (frame.next_child == node.members.size())
+            {
+                output.push_back('}');
+                stack.pop_back();
+                continue;
+            }
+
+            if (frame.next_child)
                 output.push_back(',');
 
-            const auto & member = node.members[i];
+            const auto & member = node.members[frame.next_child++];
             appendSlice(output, json, member.raw_name);
             output.push_back(':');
-            serializeJSON(nodes, member.value, json, output);
+            stack.push_back({member.value});
+            continue;
         }
-        output.push_back('}');
-        return;
-    }
 
-    output.push_back('[');
-    for (size_t i = 0; i < node.elements.size(); ++i)
-    {
-        if (i)
+        if (frame.next_child == node.elements.size())
+        {
+            output.push_back(']');
+            stack.pop_back();
+            continue;
+        }
+
+        if (frame.next_child)
             output.push_back(',');
-        serializeJSON(nodes, node.elements[i], json, output);
+
+        stack.push_back({node.elements[frame.next_child++]});
     }
-    output.push_back(']');
 }
 
 class FunctionJSONRemove final : public IFunction
@@ -549,7 +559,7 @@ public:
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Invalid JSON string in function {}: embedded NULL byte", getName());
 
             JSONInputStream stream(json);
-            JSONTreeBuilder builder(stream, max_json_remove_depth);
+            JSONTreeBuilder builder(stream);
             TrackedReader reader;
             const auto parse_result
                 = reader.Parse<rapidjson::kParseIterativeFlag | rapidjson::kParseNumbersAsStringsFlag>(stream, builder);
