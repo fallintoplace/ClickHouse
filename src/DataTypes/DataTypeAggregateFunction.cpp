@@ -382,7 +382,12 @@ static void setVersionToAggregateFunctionsImpl(
             return;
         const size_t new_version = *chosen_version;
 
-        if (aggregate_function_type->hasExplicitVersion() && aggregate_function_type->getVersion() == new_version)
+        const bool same_name_policy = new_version != 0
+            || !function->requiresExplicitStateVersionForWrite()
+            || aggregate_function_type->printsExplicitZeroInName() == print_explicit_zero_in_name;
+        if (aggregate_function_type->hasExplicitVersion()
+            && aggregate_function_type->getVersion() == new_version
+            && same_name_policy)
             return;
 
         /// Keep unsafe legacy unversioned metadata distinguishable from an explicit
