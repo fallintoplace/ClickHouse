@@ -115,6 +115,10 @@ void setVersionToAggregateFunctions(DataTypePtr & type, bool if_empty, std::opti
 /// the persisted type name, so the column keeps its layout when a newer server changes the default.
 void pinCurrentStateVersionToAggregateFunctions(DataTypePtr & type);
 
+/// True when an unversioned aggregate state nested in `type` cannot safely accept new writes
+/// until its current state version is pinned explicitly.
+bool hasLegacyUnversionedAggregateStateRequiringMigration(const DataTypePtr & type);
+
 /// Checks type of any nested type is DataTypeAggregateFunction.
 bool hasAggregateFunctionType(const DataTypePtr & type);
 
