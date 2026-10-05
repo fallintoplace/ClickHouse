@@ -115,9 +115,14 @@ String DataTypeAggregateFunction::getNameImpl(bool with_version) const
     WriteBufferFromOwnString stream;
     stream << "AggregateFunction(";
 
-    /// If aggregate function does not support versioning its version is 0 and is not printed.
-    auto data_type_version = getVersion();
-    if (with_version && data_type_version)
+    /// Version 0 is normally omitted for backward-compatible type names. Migration-sensitive
+    /// states are the exception: an explicitly pinned v0 must stay distinguishable from legacy
+    /// unversioned metadata when the type is serialized to SQL and parsed again.
+    const auto data_type_version = getVersion();
+    const bool print_explicit_zero = hasExplicitVersion()
+        && data_type_version == 0
+        && function->requiresExplicitStateVersionForWrite();
+    if (with_version && (data_type_version || print_explicit_zero))
         stream << data_type_version << ", ";
     stream << function->getName();
     stream << formatParameters(*function, parameters);
