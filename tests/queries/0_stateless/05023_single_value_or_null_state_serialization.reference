@@ -12,3 +12,5 @@ AggregateFunction(1, singleValueOrNull, UInt64)
 AggregateFunction(singleValueOrNullTuple, Tuple(UInt64, UInt64))
 AggregateFunction(1, singleValueOrNullTuple, Tuple(UInt64, UInt64))
 (42,43)
+AggregateFunction(singleValueOrNull, UInt64)
+42
