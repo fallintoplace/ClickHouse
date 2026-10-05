@@ -163,26 +163,6 @@ size_t capMinBlockSizeBytesForMemoryLimit(size_t value)
     return value;
 }
 
-bool hasLegacyUnversionedAggregateStateRequiringMigration(const DataTypePtr & type)
-{
-    bool found = false;
-    auto check_type = [&](const IDataType & nested_type)
-    {
-        const auto * aggregate_type = typeid_cast<const DataTypeAggregateFunction *>(&nested_type);
-        if (!aggregate_type
-            || aggregate_type->hasExplicitVersion()
-            || aggregate_type->getVersion() != aggregate_type->getFunction()->getDefaultVersion()
-            || !aggregate_type->getFunction()->requiresExplicitStateVersionForWrite())
-            return;
-
-        found = true;
-    };
-
-    check_type(*type);
-    type->forEachChild(check_type);
-    return found;
-}
-
 void checkLegacyAggregateStateInsert(const StoragePtr & storage, const StorageMetadataPtr & metadata)
 {
     /// Remote storages negotiate aggregate-state versions with the peer and must keep accepting
