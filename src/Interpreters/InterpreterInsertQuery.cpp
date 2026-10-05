@@ -272,7 +272,8 @@ Block InterpreterInsertQuery::getSampleBlock(
             return metadata_snapshot->getSampleBlockWithVirtuals(VirtualsKind::All, VirtualsMaterializationPlace::All);
 
         Block result = metadata_snapshot->getSampleBlockNonMaterialized();
-        checkLegacySingleValueOrNullStateInsert(result, table);
+        if (!query.table_function)
+            checkLegacySingleValueOrNullStateInsert(result, table);
         return result;
     }
 
@@ -287,7 +288,7 @@ Block InterpreterInsertQuery::getSampleBlock(
     }
 
     Block result = getSampleBlock(names, table, metadata_snapshot, no_destination, allow_materialized);
-    if (!no_destination)
+    if (!no_destination && !query.table_function)
         checkLegacySingleValueOrNullStateInsert(result, table);
     return result;
 }
