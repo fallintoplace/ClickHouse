@@ -228,6 +228,21 @@ def test_single_value_or_null_native_compatibility(start_cluster):
         )
         assert upstream.query(f"SELECT toTypeName(state) FROM {upstream_table}").strip() == "AggregateFunction(0, singleValueOrNull, UInt64)"
         assert upstream.query(f"SELECT isNull(singleValueOrNullMerge(state)) FROM {upstream_table}").strip() == "1"
+
+        # An already pinned v0 source still has to announce the legacy unversioned type to the old peer.
+        backward.query(f"TRUNCATE TABLE {backward_table}")
+        upstream.query(f"TRUNCATE TABLE {upstream_table}")
+        upstream.query(
+            f"INSERT INTO {upstream_table} SELECT singleValueOrNullState(toUInt64(42))"
+        )
+        upstream.query(
+            f"""
+            INSERT INTO FUNCTION remote('{backward.ip_address}', currentDatabase(), {backward_table})
+            SELECT state FROM {upstream_table}
+            """
+        )
+        assert backward.query(f"SELECT count() FROM {backward_table}").strip() == "1"
+        assert backward.query(f"SELECT isNull(singleValueOrNullMerge(state)) FROM {backward_table}").strip() == "1"
     finally:
         backward.query(f"DROP TABLE IF EXISTS {backward_table}")
         upstream.query(f"DROP TABLE IF EXISTS {upstream_table}")
