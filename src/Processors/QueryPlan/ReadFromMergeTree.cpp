@@ -14,6 +14,7 @@
 #include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/IDataType.h>
 #include <DataTypes/NestedUtils.h>
+#include <DataTypes/TypeTree.h>
 #include <Formats/FormatSettings.h>
 #include <Functions/FunctionsMiscellaneous.h>
 #include <Functions/IFunction.h>
@@ -140,12 +141,7 @@ NameSet sortingKeyNamesSafeBeforeFinal(const KeyDescription & sorting_key)
     NameSet names;
     for (size_t i = 0; i < sorting_key.column_names.size(); ++i)
     {
-        bool has_float = isFloat(removeLowCardinalityAndNullable(sorting_key.data_types[i]));
-        sorting_key.data_types[i]->forEachChild([&](const IDataType & child)
-        {
-            if (!has_float && WhichDataType(child).isFloat())
-                has_float = true;
-        });
+        bool has_float = anyInTypeTree(*sorting_key.data_types[i], [](const IDataType & node) { return isFloat(node); });
         if (!has_float)
             names.insert(sorting_key.column_names[i]);
     }
@@ -661,6 +657,17 @@ Pipe ReadFromMergeTree::readFromPoolParallelReplicas(
         context->getClusterForParallelReplicas()->getShardsInfo().at(0).getAllNodeCount(),
         data.getStorageID().getFullTableName()};
 
+    /// Set total rows in progress only on initiator with local plan, otherwise rows will be counted multiple times.
+    /// The coordinator cannot report them in this case: it receives the initiator's announcement
+    /// before the progress callback is set by remote sources.
+    size_t total_rows = 0;
+    if (isParallelReplicasLocalPlanForInitiator())
+    {
+        total_rows = parts_with_range.getRowsCountAllParts();
+        if (query_info.trivial_limit > 0 && query_info.trivial_limit < total_rows)
+            total_rows = query_info.trivial_limit;
+    }
+
     auto pool = std::make_shared<MergeTreeReadPoolParallelReplicas>(
         extension,
         std::move(parts_with_range),
@@ -706,6 +713,10 @@ Pipe ReadFromMergeTree::readFromPoolParallelReplicas(
             &storage_snapshot->metadata->getColumns());
 
         auto source = std::make_shared<MergeTreeSource>(std::move(processor), data.getLogName());
+
+        if (i == 0 && total_rows)
+            source->addTotalRowsApprox(total_rows);
+
         pipes.emplace_back(std::move(source));
     }
 
@@ -1347,14 +1358,8 @@ static bool canScaleSizeBySelectedRows(const IDataType & type)
     if (!type.haveMaximumSizeOfValue())
         return false;
 
-    bool has_low_cardinality = type.lowCardinality();
     /// `LowCardinality` may sit below `Array`, `Nullable`, `Tuple` and friends.
-    type.forEachChild([&](const IDataType & child)
-    {
-        has_low_cardinality |= child.lowCardinality();
-    });
-
-    return !has_low_cardinality;
+    return !anyInTypeTree(type, [](const IDataType & node) { return node.lowCardinality(); });
 }
 
 /// Mirrors `injectRequiredColumnsRecursively`: a column that is absent from a part is filled from its
@@ -2337,16 +2342,7 @@ bool ReadFromMergeTree::doNotMergePartsAcrossPartitionsFinal() const
         if (!primary_key_columns_set.contains(required_column.name))
             return false;
 
-        if (isFloat(removeLowCardinalityAndNullable(required_column.type)))
-            return false;
-
-        bool has_float = false;
-        required_column.type->forEachChild([&](const IDataType & child)
-        {
-            if (!has_float && WhichDataType(child).isFloat())
-                has_float = true;
-        });
-        if (has_float)
+        if (anyInTypeTree(*required_column.type, [](const IDataType & type) { return isFloat(type); }))
             return false;
     }
 
@@ -3285,16 +3281,7 @@ void ReadFromMergeTree::deferFiltersAfterFinalIfNeeded()
             partition_required_columns.begin(), partition_required_columns.end(),
             [](const auto & col)
             {
-                if (isFloat(removeLowCardinalityAndNullable(col.type)))
-                    return true;
-
-                bool has_float = false;
-                col.type->forEachChild([&](const IDataType & child)
-                {
-                    if (!has_float && WhichDataType(child).isFloat())
-                        has_float = true;
-                });
-                return has_float;
+                return anyInTypeTree(*col.type, [](const IDataType & type) { return WhichDataType(type).isFloat(); });
             });
 
         skip_partition_pruning = (!exprs_match && !columns_match) || reads_float_column;
