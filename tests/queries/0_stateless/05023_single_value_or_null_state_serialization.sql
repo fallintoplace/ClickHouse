@@ -60,3 +60,46 @@ GROUP BY id
 ORDER BY id;
 
 DROP TABLE single_value_or_null_legacy_state;
+
+DROP TABLE IF EXISTS single_value_or_null_legacy_unversioned;
+
+CREATE TABLE single_value_or_null_legacy_unversioned
+(
+    id UInt8,
+    state AggregateFunction(singleValueOrNull, UInt64)
+)
+ENGINE = MergeTree
+ORDER BY id;
+
+-- Restating the type without a version simulates metadata written before singleValueOrNull state versioning.
+ALTER TABLE single_value_or_null_legacy_unversioned
+    MODIFY COLUMN state AggregateFunction(singleValueOrNull, UInt64);
+
+DETACH TABLE single_value_or_null_legacy_unversioned;
+ATTACH TABLE single_value_or_null_legacy_unversioned;
+
+SELECT type
+FROM system.columns
+WHERE database = currentDatabase()
+    AND table = 'single_value_or_null_legacy_unversioned'
+    AND name = 'state';
+
+INSERT INTO single_value_or_null_legacy_unversioned
+SELECT 1, singleValueOrNullState(toUInt64(42)); -- { serverError ILLEGAL_COLUMN }
+
+ALTER TABLE single_value_or_null_legacy_unversioned
+    MODIFY COLUMN state AggregateFunction(1, singleValueOrNull, UInt64);
+
+INSERT INTO single_value_or_null_legacy_unversioned
+SELECT 1, singleValueOrNullState(toUInt64(42));
+
+SELECT type
+FROM system.columns
+WHERE database = currentDatabase()
+    AND table = 'single_value_or_null_legacy_unversioned'
+    AND name = 'state';
+
+SELECT singleValueOrNullMerge(state)
+FROM single_value_or_null_legacy_unversioned;
+
+DROP TABLE single_value_or_null_legacy_unversioned;

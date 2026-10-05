@@ -352,6 +352,15 @@ static DataTypePtr create(const ASTPtr & arguments)
     return std::make_shared<DataTypeAggregateFunction>(function, argument_types, params_row, version);
 }
 
+static bool isSingleValueOrNullState(const AggregateFunctionPtr & function)
+{
+    for (auto current = function; current; current = current->getNestedFunction())
+        if (current->getName() == "singleValueOrNull")
+            return true;
+
+    return false;
+}
+
 /// `choose_version` returns the version to pin on a versioned aggregate function type, or nothing
 /// to leave the type untouched.
 static void setVersionToAggregateFunctionsImpl(
@@ -373,6 +382,16 @@ static void setVersionToAggregateFunctionsImpl(
         const size_t new_version = *chosen_version;
 
         if (aggregate_function_type->hasExplicitVersion() && aggregate_function_type->getVersion() == new_version)
+            return;
+
+        /// Keep legacy unversioned singleValueOrNull metadata distinguishable from an explicit
+        /// AggregateFunction(0, ...) declaration. Both read as version 0, but only the unversioned
+        /// spelling can come from a pre-versioning table and must be migrated before new states are
+        /// written into it. Once the function default moves past 0 this special case no longer applies.
+        if (if_empty
+            && !aggregate_function_type->hasExplicitVersion()
+            && new_version == function->getDefaultVersion()
+            && isSingleValueOrNullState(function))
             return;
 
         auto new_type = std::make_shared<DataTypeAggregateFunction>(

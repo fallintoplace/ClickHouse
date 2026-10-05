@@ -4,12 +4,14 @@
 #include <Access/Common/AccessFlags.h>
 #include <Common/MemoryTrackerUtils.h>
 #include <AggregateFunctions/AggregateFunctionFactory.h>
+#include <AggregateFunctions/IAggregateFunction.h>
 #include <Columns/ColumnNullable.h>
 #include <Core/Settings.h>
 #include <Common/MemoryTracker.h>
 #include <Core/SettingsEnums.h>
 #include <Core/ServerSettings.h>
 #include <Core/DeduplicateInsert.h>
+#include <DataTypes/DataTypeAggregateFunction.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <Interpreters/ApplyWithAliasVisitor.h>
 #include <Interpreters/ApplyWithSubqueryVisitor.h>
@@ -203,6 +205,58 @@ StoragePtr InterpreterInsertQuery::getTable(ASTInsertQuery & query)
     return resolveStorageProxyLoading(DatabaseCatalog::instance().getTable(query.table_id, current_context));
 }
 
+namespace
+{
+
+bool isLegacyUnversionedSingleValueOrNullState(const DataTypePtr & type)
+{
+    bool found = false;
+    auto check_type = [&](const IDataType & nested_type)
+    {
+        const auto * aggregate_type = typeid_cast<const DataTypeAggregateFunction *>(&nested_type);
+        if (!aggregate_type || aggregate_type->hasExplicitVersion() || aggregate_type->getVersion() != 0)
+            return;
+
+        for (auto function = aggregate_type->getFunction(); function; function = function->getNestedFunction())
+        {
+            if (function->getName() == "singleValueOrNull")
+            {
+                found = true;
+                return;
+            }
+        }
+    };
+
+    check_type(*type);
+    type->forEachChild(check_type);
+    return found;
+}
+
+void checkLegacySingleValueOrNullStateInsert(const Block & block, const StoragePtr & table)
+{
+    for (const auto & column : block)
+    {
+        if (!isLegacyUnversionedSingleValueOrNullState(column.type))
+            continue;
+
+        DataTypePtr migration_type = column.type;
+        pinCurrentStateVersionToAggregateFunctions(migration_type);
+
+        throw Exception(
+            ErrorCodes::ILLEGAL_COLUMN,
+            "Cannot insert into legacy unversioned aggregate state column {} of table {} because version 0 of "
+            "singleValueOrNull does not preserve whether the state saw one or multiple distinct values. "
+            "Migrate the column first with ALTER TABLE {} MODIFY COLUMN {} {}",
+            backQuote(column.name),
+            table->getStorageID().getNameForLogs(),
+            table->getStorageID().getNameForLogs(),
+            backQuote(column.name),
+            migration_type->getName());
+    }
+}
+
+}
+
 Block InterpreterInsertQuery::getSampleBlock(
     const ASTInsertQuery & query,
     const StoragePtr & table,
@@ -216,7 +270,10 @@ Block InterpreterInsertQuery::getSampleBlock(
     {
         if (no_destination)
             return metadata_snapshot->getSampleBlockWithVirtuals(VirtualsKind::All, VirtualsMaterializationPlace::All);
-        return metadata_snapshot->getSampleBlockNonMaterialized();
+
+        Block result = metadata_snapshot->getSampleBlockNonMaterialized();
+        checkLegacySingleValueOrNullStateInsert(result, table);
+        return result;
     }
 
     /// Form the block based on the column names from the query
@@ -229,7 +286,10 @@ Block InterpreterInsertQuery::getSampleBlock(
         names.emplace_back(std::move(current_name));
     }
 
-    return getSampleBlock(names, table, metadata_snapshot, no_destination, allow_materialized);
+    Block result = getSampleBlock(names, table, metadata_snapshot, no_destination, allow_materialized);
+    if (!no_destination)
+        checkLegacySingleValueOrNullStateInsert(result, table);
+    return result;
 }
 
 Block InterpreterInsertQuery::getSampleBlock(
