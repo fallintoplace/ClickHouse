@@ -188,7 +188,8 @@ CREATE TABLE single_value_or_null_legacy_memory
 )
 ENGINE = Memory;
 
--- Memory stores aggregate states as in-memory columns and never serializes them to the legacy payload.
+-- Memory keeps inserted blocks in RAM, but BACKUP later serializes them through NativeWriter.
+-- Reject fresh writes while the table metadata still pins the unsafe legacy state format.
 ALTER TABLE single_value_or_null_legacy_memory
     MODIFY COLUMN state AggregateFunction(singleValueOrNull, UInt64);
 
@@ -200,6 +201,12 @@ FROM system.columns
 WHERE database = currentDatabase()
     AND table = 'single_value_or_null_legacy_memory'
     AND name = 'state';
+
+INSERT INTO single_value_or_null_legacy_memory
+SELECT 1, singleValueOrNullState(toUInt64(42)); -- { serverError ILLEGAL_COLUMN }
+
+ALTER TABLE single_value_or_null_legacy_memory
+    MODIFY COLUMN state AggregateFunction(1, singleValueOrNull, UInt64);
 
 INSERT INTO single_value_or_null_legacy_memory
 SELECT 1, singleValueOrNullState(toUInt64(42));
