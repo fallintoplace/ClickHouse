@@ -372,17 +372,15 @@ static void setVersionToAggregateFunctionsImpl(
             return;
         const size_t new_version = *chosen_version;
 
-        if (aggregate_function_type->hasExplicitVersion() && aggregate_function_type->getVersion() == new_version)
-            return;
-
         /// Keep unsafe legacy unversioned metadata distinguishable from an explicit
         /// AggregateFunction(0, ...) declaration. Both read as version 0, but an unversioned type
         /// that requires an explicit version for new writes must remain recognizable after ATTACH.
         /// Once the function default moves past the legacy version this special case no longer applies.
-        if (if_empty
-            && !aggregate_function_type->hasExplicitVersion()
-            && new_version == function->getDefaultVersion()
-            && function->requiresExplicitStateVersionForWrite())
+        if ((aggregate_function_type->hasExplicitVersion() && aggregate_function_type->getVersion() == new_version)
+            || (if_empty
+                && !aggregate_function_type->hasExplicitVersion()
+                && new_version == function->getDefaultVersion()
+                && function->requiresExplicitStateVersionForWrite()))
             return;
 
         auto new_type = std::make_shared<DataTypeAggregateFunction>(
