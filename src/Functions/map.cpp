@@ -153,6 +153,37 @@ private:
     FunctionOverloadResolverPtr function_map_from_arrays;
 };
 
+ColumnPtr normalizeMapKeyColumn(ColumnPtr data_keys, const String & function_name)
+{
+    if (!isColumnNullableOrLowCardinalityNullable(*data_keys))
+        return data_keys;
+
+    if (const auto * nullable = checkAndGetColumn<ColumnNullable>(data_keys.get()))
+    {
+        const auto & null_map = nullable->getNullMapData();
+        if (!memoryIsZero(null_map.data(), 0, null_map.size()))
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "The nested column of first argument in function {} must not contain NULLs",
+                function_name);
+
+        return nullable->getNestedColumnPtr();
+    }
+
+    if (const auto * low_cardinality = checkAndGetColumn<ColumnLowCardinality>(data_keys.get()))
+    {
+        if (low_cardinality->containsNull())
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "The nested column of first argument in function {} must not contain NULLs",
+                function_name);
+
+        return low_cardinality->cloneWithDefaultOnNull();
+    }
+
+    return data_keys;
+}
+
 /// mapFromArrays(keys, values) is a function that allows you to make key-value pair from a pair of arrays or maps
 class FunctionMapFromArrays final : public IFunction
 {
@@ -232,27 +263,7 @@ public:
         auto [col_values, values_holder] = get_array_column(arguments[1].column);
 
         /// Nullable(T) or LowCardinality(Nullable(T)) are okay as nested key types but actual NULL values are not okay.
-        ColumnPtr data_keys = col_keys->getDataPtr();
-        if (isColumnNullableOrLowCardinalityNullable(*data_keys))
-        {
-            if (const auto * nullable = checkAndGetColumn<ColumnNullable>(data_keys.get()))
-            {
-                const auto * null_map = &nullable->getNullMapData();
-                if (null_map && !memoryIsZero(null_map->data(), 0, null_map->size()))
-                    throw Exception(
-                        ErrorCodes::BAD_ARGUMENTS, "The nested column of first argument in function {} must not contain NULLs", getName());
-
-                data_keys = nullable->getNestedColumnPtr();
-            }
-            else if (const auto * low_cardinality = checkAndGetColumn<ColumnLowCardinality>(data_keys.get()))
-            {
-                if (low_cardinality->containsNull())
-                    throw Exception(
-                        ErrorCodes::BAD_ARGUMENTS, "The nested column of first argument in function {} must not contain NULLs", getName());
-
-                data_keys = low_cardinality->cloneWithDefaultOnNull();
-            }
-        }
+        ColumnPtr data_keys = normalizeMapKeyColumn(col_keys->getDataPtr(), getName());
 
         if (!col_keys->hasEqualOffsets(*col_values))
             throw Exception(ErrorCodes::SIZES_OF_ARRAYS_DONT_MATCH, "Two arguments of function {} must have equal sizes", getName());
@@ -270,12 +281,7 @@ class FunctionMapFromEntries final : public IFunction
 public:
     static constexpr auto name = "mapFromEntries";
 
-    explicit FunctionMapFromEntries(ContextPtr context)
-        : function_map_from_arrays(FunctionFactory::instance().get("mapFromArrays", context))
-    {
-    }
-
-    static FunctionPtr create(ContextPtr context) { return std::make_shared<FunctionMapFromEntries>(context); }
+    static FunctionPtr create(ContextPtr) { return std::make_shared<FunctionMapFromEntries>(); }
     String getName() const override { return name; }
 
     size_t getNumberOfArguments() const override { return 1; }
@@ -283,8 +289,6 @@ public:
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return false; }
     bool useDefaultImplementationForNulls() const override { return true; }
     bool useDefaultImplementationForConstants() const override { return true; }
-    /// Preserve nested LowCardinality key/value types instead of letting the generic function
-    /// wrapper recursively materialize Array(Tuple(LowCardinality(...), ...)).
     bool useDefaultImplementationForLowCardinalityColumns() const override { return false; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
@@ -305,9 +309,6 @@ public:
                 arguments[0]->getName());
 
         const auto & nested_type = array_type->getNestedType();
-
-        /// An untyped empty array has type Array(Nothing). It can only contain empty arrays,
-        /// so it naturally produces an empty Map(Nothing, Nothing).
         if (isNothing(nested_type))
             return std::make_shared<DataTypeMap>(nested_type, nested_type);
 
@@ -324,7 +325,7 @@ public:
     }
 
     ColumnPtr executeImpl(
-        const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type, size_t input_rows_count) const override
+        const ColumnsWithTypeAndName & arguments, const DataTypePtr & /* result_type */, size_t /* input_rows_count */) const override
     {
         ColumnPtr holder = arguments[0].column->convertToFullColumnIfConst();
         const auto * entries = checkAndGetColumn<ColumnArray>(holder.get());
@@ -335,66 +336,25 @@ public:
                 getName(),
                 holder->getName());
 
-        const auto & array_type = assert_cast<const DataTypeArray &>(*arguments[0].type);
-        const auto & nested_type = array_type.getNestedType();
+        const auto & nested_type = assert_cast<const DataTypeArray &>(*arguments[0].type).getNestedType();
         const auto & offsets = entries->getOffsetsPtr();
 
-        const DataTypeTuple * tuple_type = nullptr;
-        const ColumnTuple * tuple_column = nullptr;
-
-        if (!isNothing(nested_type))
-        {
-            tuple_type = checkAndGetDataType<DataTypeTuple>(nested_type.get());
-            tuple_column = checkAndGetColumn<ColumnTuple>(entries->getDataPtr().get());
-            if (!tuple_type || tuple_type->getElements().size() != 2 || !tuple_column || tuple_column->tupleSize() != 2)
-                throw Exception(
-                    ErrorCodes::ILLEGAL_COLUMN,
-                    "Argument column of function {} must be Array(Tuple(K, V)), but {} is given",
-                    getName(),
-                    holder->getName());
-
-            /// Map and Array(Tuple) have the same physical layout. Rewrap the input directly when
-            /// its element types already match the result. Nullable keys need normalization below.
-            const auto & result_map_type = assert_cast<const DataTypeMap &>(*result_type);
-            if (tuple_type->getElement(0)->equals(*result_map_type.getKeyType())
-                && tuple_type->getElement(1)->equals(*result_map_type.getValueType()))
-                return ColumnMap::create(std::move(holder));
-        }
-
-        ColumnPtr keys_data;
-        ColumnPtr values_data;
-        DataTypePtr key_type;
-        DataTypePtr value_type;
-
+        /// Array(Nothing) is the type of an untyped empty array. Build the physical
+        /// two-column tuple expected by ColumnMap without materializing any data.
         if (isNothing(nested_type))
-        {
-            keys_data = entries->getDataPtr();
-            values_data = entries->getDataPtr();
-            key_type = nested_type;
-            value_type = nested_type;
-        }
-        else
-        {
-            keys_data = tuple_column->getColumnPtr(0);
-            values_data = tuple_column->getColumnPtr(1);
-            key_type = tuple_type->getElement(0);
-            value_type = tuple_type->getElement(1);
-        }
+            return ColumnMap::create(entries->getDataPtr(), entries->getDataPtr(), offsets);
 
-        const auto key_array_type = std::make_shared<DataTypeArray>(key_type);
-        const auto value_array_type = std::make_shared<DataTypeArray>(value_type);
-        auto key_array = ColumnArray::create(keys_data, offsets);
-        auto value_array = ColumnArray::create(values_data, offsets);
+        const auto * tuple_column = checkAndGetColumn<ColumnTuple>(entries->getDataPtr().get());
+        if (!tuple_column || tuple_column->tupleSize() != 2)
+            throw Exception(
+                ErrorCodes::ILLEGAL_COLUMN,
+                "Argument column of function {} must be Array(Tuple(K, V)), but {} is given",
+                getName(),
+                holder->getName());
 
-        ColumnsWithTypeAndName map_args{
-            {key_array, key_array_type, ""},
-            {value_array, value_array_type, ""}};
-        return function_map_from_arrays->build(map_args)->execute(
-            map_args, result_type, input_rows_count, /* dry_run = */ false);
+        auto keys = normalizeMapKeyColumn(tuple_column->getColumnPtr(0), getName());
+        return ColumnMap::create(keys, tuple_column->getColumnPtr(1), offsets);
     }
-
-private:
-    FunctionOverloadResolverPtr function_map_from_arrays;
 };
 
 class FunctionMapUpdate final : public IFunction
