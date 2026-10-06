@@ -10,6 +10,7 @@ Map(String, UInt8)
 {'a':1,'b':2}
 {'a':1,'b':2}
 Map(String, UInt8)
+{}	Map(String, UInt8)
 {'a':1,'b':2}	Map(LowCardinality(String), UInt8)
 0	{'0':0}
 1	{'1':1}
