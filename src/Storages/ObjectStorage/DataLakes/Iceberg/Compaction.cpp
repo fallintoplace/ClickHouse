@@ -1570,6 +1570,24 @@ void compactIcebergTable(
             context_,
             write_format,
             plan.metadata_compression_method);
+
+        const auto [_post_write_metadata_version, post_write_metadata_file_path, _post_write_compression_method]
+            = getLatestOrExplicitMetadataFileAndVersion(
+                object_storage_,
+                persistent_table_components.table_path,
+                data_lake_settings,
+                persistent_table_components.metadata_cache,
+                context_,
+                log.get(),
+                persistent_table_components.table_uuid,
+                persistent_table_components.metadata_compression_method,
+                /* force_fetch_latest_metadata */ true,
+                /* ignore_metadata_pointer_overrides */ true);
+        if (post_write_metadata_file_path != plan.metadata_file_path)
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "Iceberg metadata changed while writing compacted data; refusing to publish or delete old files");
+
         writeMetadataFiles(plan, persistent_table_components.path_resolver, object_storage_, context_, sample_block_, write_format, persistent_table_components.table_path);
         clearOldFiles(object_storage_, old_files);
     }
