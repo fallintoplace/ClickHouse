@@ -337,7 +337,7 @@ void ColumnsDescription::setAliases(NamesAndAliases aliases)
 {
     for (auto & alias : aliases)
     {
-        ColumnDescription description(std::move(alias.name), std::move(alias.type), std::move(alias.comment));
+        ColumnDescription description(std::move(alias.name), std::move(alias.type));
         description.default_desc.kind = ColumnDefaultKind::Alias;
 
         const char * alias_expression_pos = alias.expression.data();
@@ -491,10 +491,17 @@ void ColumnsDescription::rename(const String & column_from, const String & colum
                         column_from, getHintsMessage(column_from));
     }
 
-    columns.get<1>().modify_key(it, [&column_to] (String & old_name)
+    /// Before `modify_key`: `column_from` may refer to the name of the renamed column itself.
+    const bool has_subcolumns = subcolumns.get<1>().find(column_from) != subcolumns.get<1>().end();
+    removeSubcolumns(column_from);
+
+    bool renamed = columns.get<1>().modify_key(it, [&column_to] (String & old_name)
     {
         old_name = column_to;
     });
+
+    if (renamed && has_subcolumns)
+        addSubcolumns(column_to, it->type);
     invalidateGetCache();
 }
 
