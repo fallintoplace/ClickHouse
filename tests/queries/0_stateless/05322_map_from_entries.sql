@@ -19,6 +19,10 @@ SELECT mapFromEntries(CAST([('a', 1), ('b', 2)], 'Array(Tuple(foo String, bar UI
 
 SELECT mapFromEntries(CAST([('a', 1), ('b', 2)], 'Array(Tuple(Nullable(String), UInt8))')) FORMAT TabSeparatedRaw;
 SELECT toTypeName(mapFromEntries(CAST([('a', 1)], 'Array(Tuple(Nullable(String), UInt8))'))) FORMAT TabSeparatedRaw;
+SELECT
+    mapFromEntries(CAST([], 'Array(Tuple(Nullable(String), UInt8))')),
+    toTypeName(mapFromEntries(CAST([], 'Array(Tuple(Nullable(String), UInt8))')))
+FORMAT TabSeparatedRaw;
 
 SELECT
     mapFromEntries([
