@@ -230,7 +230,7 @@ private:
     struct ContainerFrame
     {
         JSONNodeIndex node;
-        String member_name;
+        ::String member_name;
         JSONSlice raw_member_name;
     };
 
