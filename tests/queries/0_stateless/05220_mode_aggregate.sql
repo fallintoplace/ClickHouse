@@ -48,11 +48,17 @@ FROM VALUES('x Tuple(UInt8, String)', ((1, 'a')), ((2, 'b')), ((2, 'b')));
 SELECT toTypeName(mode(toLowCardinality(toString(number % 2))))
 FROM numbers(3);
 
-SELECT 'floating point zero';
-SELECT mode(x) = 0
+SELECT 'floating point hash semantics';
+SELECT mode(x) = 1
 FROM VALUES('x Float32', (0.0), (0.0), (-0.0), (-0.0), (1.0), (1.0), (1.0));
-SELECT mode(x) = 0
+SELECT mode(x) = 1
 FROM VALUES('x Float64', (0.0), (0.0), (-0.0), (-0.0), (1.0), (1.0), (1.0));
+SELECT mode(x)[1] = 1
+FROM VALUES('x Array(Float64)', ([0.0]), ([0.0]), ([-0.0]), ([-0.0]), ([1.0]), ([1.0]), ([1.0]));
+SELECT tupleElement(mode(x), 1) = 1
+FROM VALUES(
+    'x Tuple(Float64, UInt8)',
+    ((0.0, 7)), ((0.0, 7)), ((-0.0, 7)), ((-0.0, 7)), ((1.0, 7)), ((1.0, 7)), ((1.0, 7)));
 
 SELECT 'other numeric types';
 SELECT mode(x), toTypeName(mode(x))
