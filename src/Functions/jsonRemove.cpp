@@ -615,7 +615,8 @@ REGISTER_FUNCTION(JSONRemove)
 {
     FunctionDocumentation::Description description = R"(
 Removes one or more object members or array elements from a JSON string using JSONPath.
-Each path must target one object member name or array element. Paths are applied from left to right.
+Each path must resolve to one object member name or array position. Paths are applied from left to right.
+A JSONPath range that resolves to one array position, such as `$[1 to 2]`, is treated as that position and is equivalent to `$[1]`.
 Object member steps follow all members with matching names, including duplicates.
 A final object member step removes all matching members. Missing paths do not remove any values.
 The result is compacted. Invalid JSON causes an exception.
@@ -625,7 +626,8 @@ The result is compacted. Invalid JSON causes an exception.
         = {{"json", "A string containing valid JSON.", {"String"}},
            {"path[, path ...]",
             "One or more constant strings containing JSONPath expressions. Each "
-            "path must target one object member name or array element.",
+            "path must resolve to one object member name or array position. A range that resolves "
+            "to one array position, such as $[1 to 2], is accepted as $[1].",
             {"String"}}};
     FunctionDocumentation::ReturnedValue returned_value = {"Returns the JSON document as a compact string.", {"String"}};
     FunctionDocumentation::Examples examples
