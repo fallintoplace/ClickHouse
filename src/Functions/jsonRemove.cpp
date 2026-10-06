@@ -92,6 +92,13 @@ struct JSONNode
 };
 
 using JSONNodes = VectorWithMemoryTracking<JSONNode>;
+using JSONNodeIndices = VectorWithMemoryTracking<JSONNodeIndex>;
+
+struct JSONPathTraversalScratch
+{
+    JSONNodeIndices current;
+    JSONNodeIndices next;
+};
 
 /// RapidJSON keeps an optimized local copy of MemoryStream while parsing strings and numbers,
 /// so a SAX handler cannot observe its live cursor. This custom stream uses RapidJSON's default
@@ -332,37 +339,67 @@ ParsedPath parseJSONPath(const String & path, uint32_t parse_depth, uint32_t par
     return result;
 }
 
-bool removeAtPath(JSONNodes & nodes, JSONNodeIndex root, const ParsedPath & path)
+void collectNextNodes(
+    const JSONNodes & nodes,
+    const JSONNodeIndices & parent_indices,
+    const PathStep & step,
+    JSONNodeIndices & next_parent_indices)
 {
-    VectorWithMemoryTracking<JSONNodeIndex> parent_indices;
-    VectorWithMemoryTracking<JSONNodeIndex> next_parent_indices;
+    next_parent_indices.clear();
+
+    for (const auto parent_index : parent_indices)
+    {
+        const auto & parent = nodes[parent_index];
+        if (step.type == PathStep::Type::Member)
+        {
+            if (parent.type != JSONNode::Type::Object)
+                continue;
+
+            for (const auto & member : parent.members)
+            {
+                if (member.name == step.member_name)
+                    next_parent_indices.push_back(member.value);
+            }
+        }
+        else if (parent.type == JSONNode::Type::Array && step.index < parent.elements.size())
+        {
+            next_parent_indices.push_back(parent.elements[step.index]);
+        }
+    }
+}
+
+bool removePathStep(JSONNode & parent, const PathStep & step)
+{
+    if (step.type == PathStep::Type::Member)
+    {
+        if (parent.type != JSONNode::Type::Object)
+            return false;
+
+        return std::erase_if(parent.members, [&](const auto & member) { return member.name == step.member_name; }) != 0;
+    }
+
+    if (parent.type != JSONNode::Type::Array || step.index >= parent.elements.size())
+        return false;
+
+    parent.elements.erase(parent.elements.begin() + step.index);
+    return true;
+}
+
+bool removeAtPath(
+    JSONNodes & nodes,
+    JSONNodeIndex root,
+    const ParsedPath & path,
+    JSONPathTraversalScratch & scratch)
+{
+    auto & parent_indices = scratch.current;
+    auto & next_parent_indices = scratch.next;
+    parent_indices.clear();
+    next_parent_indices.clear();
     parent_indices.push_back(root);
 
     for (size_t i = 0; i + 1 < path.size(); ++i)
     {
-        const auto & step = path[i];
-        next_parent_indices.clear();
-
-        for (const auto parent_index : parent_indices)
-        {
-            const auto & parent = nodes[parent_index];
-            if (step.type == PathStep::Type::Member)
-            {
-                if (parent.type != JSONNode::Type::Object)
-                    continue;
-
-                for (const auto & member : parent.members)
-                {
-                    if (member.name == step.member_name)
-                        next_parent_indices.push_back(member.value);
-                }
-            }
-            else if (parent.type == JSONNode::Type::Array && step.index < parent.elements.size())
-            {
-                next_parent_indices.push_back(parent.elements[step.index]);
-            }
-        }
-
+        collectNextNodes(nodes, parent_indices, path[i], next_parent_indices);
         if (next_parent_indices.empty())
             return false;
 
@@ -370,42 +407,10 @@ bool removeAtPath(JSONNodes & nodes, JSONNodeIndex root, const ParsedPath & path
     }
 
     bool removed = false;
-    const auto & target = path.back();
-
     for (const auto parent_index : parent_indices)
     {
-        auto & parent = nodes[parent_index];
-        if (target.type == PathStep::Type::Member)
-        {
-            if (parent.type != JSONNode::Type::Object)
-                continue;
-
-            size_t write_index = 0;
-            bool removed_from_parent = false;
-            for (size_t read_index = 0; read_index < parent.members.size(); ++read_index)
-            {
-                if (parent.members[read_index].name == target.member_name)
-                {
-                    removed_from_parent = true;
-                    continue;
-                }
-
-                if (write_index != read_index)
-                    parent.members[write_index] = std::move(parent.members[read_index]);
-                ++write_index;
-            }
-
-            if (removed_from_parent)
-            {
-                parent.members.resize(write_index);
-                removed = true;
-            }
-        }
-        else if (parent.type == JSONNode::Type::Array && target.index < parent.elements.size())
-        {
-            parent.elements.erase(parent.elements.begin() + target.index);
+        if (removePathStep(nodes[parent_index], path.back()))
             removed = true;
-        }
     }
 
     return removed;
@@ -424,11 +429,18 @@ struct JSONSerializationFrame
     bool started = false;
 };
 
-void serializeJSON(const JSONNodes & nodes, JSONNodeIndex node_index, std::string_view json, ColumnString::Chars & output)
+using JSONSerializationStack = VectorWithMemoryTracking<JSONSerializationFrame>;
+
+void serializeJSON(
+    const JSONNodes & nodes,
+    JSONNodeIndex node_index,
+    std::string_view json,
+    ColumnString::Chars & output,
+    JSONSerializationStack & stack)
 {
     /// Keep serialization off the C++ call stack so deeply nested valid JSON is limited by memory,
     /// like the iterative RapidJSON parser above.
-    VectorWithMemoryTracking<JSONSerializationFrame> stack;
+    stack.clear();
     stack.push_back({node_index});
 
     while (!stack.empty())
@@ -556,6 +568,9 @@ public:
         auto & result_offsets = result->getOffsets();
         result_chars.reserve_exact(json_is_const ? json_column->getDataAt(0).size() : json_column->getChars().size());
 
+        JSONPathTraversalScratch traversal_scratch;
+        JSONSerializationStack serialization_stack;
+
         const size_t rows_to_process = json_is_const ? 1 : input_rows_count;
         for (size_t row = 0; row < rows_to_process; ++row)
         {
@@ -579,9 +594,9 @@ public:
             const auto root = builder.getRoot();
             auto nodes = builder.releaseNodes();
             for (const auto & path : paths)
-                removeAtPath(nodes, root, path);
+                removeAtPath(nodes, root, path, traversal_scratch);
 
-            serializeJSON(nodes, root, json, result_chars);
+            serializeJSON(nodes, root, json, result_chars, serialization_stack);
             result_offsets.push_back(result_chars.size());
         }
 
@@ -602,7 +617,8 @@ REGISTER_FUNCTION(JSONRemove)
     FunctionDocumentation::Description description = R"(
 Removes one or more object members or array elements from a JSON string using JSONPath.
 Each path must target one object member name or array element. Paths are applied from left to right.
-All object members with the targeted name are removed. Missing paths do not remove any values.
+Object member steps follow all members with matching names, including duplicates.
+A final object member step removes all matching members. Missing paths do not remove any values.
 The result is compacted. Invalid JSON causes an exception.
         )";
     FunctionDocumentation::Syntax syntax = "JSONRemove(json, path[, path ...])";
