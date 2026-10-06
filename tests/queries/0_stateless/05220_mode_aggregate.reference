@@ -19,7 +19,9 @@ b	String
 [2]	Array(UInt8)
 (2,'b')	Tuple(UInt8, String)
 String
-floating point zero
+floating point hash semantics
+1
+1
 1
 1
 other numeric types
