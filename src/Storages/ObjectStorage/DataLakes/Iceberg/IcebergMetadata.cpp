@@ -541,6 +541,13 @@ bool IcebergMetadata::optimize(
 
     if (settings[Setting::allow_experimental_iceberg_compaction])
     {
+        auto table_state_snapshot = extractIcebergSnapshotIdFromMetadataObject(metadata_snapshot);
+        if (!table_state_snapshot)
+            throw Exception(
+                ErrorCodes::LOGICAL_ERROR,
+                "Can't extract iceberg table state from storage snapshot for table location {}",
+                persistent_components.table_location);
+
         const auto sample_block = std::make_shared<const Block>(metadata_snapshot->getSampleBlock());
         auto snapshots_info = getHistory(context, /* ignore_metadata_pointer_overrides */ true);
         compactIcebergTable(
@@ -550,6 +557,7 @@ bool IcebergMetadata::optimize(
             getMetadataLookupSettings(),
             format_settings,
             sample_block,
+            table_state_snapshot->metadata_file_path,
             context,
             write_format);
         return true;

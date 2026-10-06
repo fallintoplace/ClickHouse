@@ -1509,6 +1509,7 @@ void compactIcebergTable(
     const DataLakeStorageSettings & data_lake_settings,
     const std::optional<FormatSettings> & format_settings_,
     SharedHeader sample_block_,
+    const String & expected_metadata_file_path,
     ContextPtr context_,
     const String & write_format)
 {
@@ -1526,6 +1527,11 @@ void compactIcebergTable(
             throw Exception(
                 ErrorCodes::BAD_ARGUMENTS,
                 "Iceberg schema changed since the table metadata was loaded; refusing OPTIMIZE to avoid rewriting stale metadata");
+
+        if (plan.metadata_file_path != expected_metadata_file_path)
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "Iceberg metadata changed since the table metadata was loaded; refusing OPTIMIZE to avoid rewriting stale metadata");
 
         auto log = getLogger("IcebergCompaction");
         const auto [_metadata_version, metadata_file_path, compression_method] = getLatestOrExplicitMetadataFileAndVersion(

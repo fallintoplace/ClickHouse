@@ -308,6 +308,44 @@ def test_optimize_rejects_latest_gc_disabled_with_compressed_metadata(
 
 
 @pytest.mark.parametrize("storage_type", ["local"])
+def test_optimize_rejects_external_metadata_only_change(
+    started_cluster_iceberg_with_spark, storage_type
+):
+    instance = started_cluster_iceberg_with_spark.instances["node1"]
+    table_name = "test_optimize_metadata_change_" + get_uuid_str()
+    spark = create_external_optimize_table(
+        started_cluster_iceberg_with_spark,
+        instance,
+        storage_type,
+        table_name,
+        with_position_delete=True,
+    )
+
+    spark_alter_table(
+        started_cluster_iceberg_with_spark,
+        spark,
+        storage_type,
+        table_name,
+        "SET TBLPROPERTIES('history.expire.max-snapshot-age-ms' = '123456789')",
+    )
+
+    table_dir = f"/var/lib/clickhouse/user_files/iceberg_data/default/{table_name}"
+    checksum_command = [
+        "bash", "-c", f"find '{table_dir}' -type f -exec sha256sum {{}} + | sort"
+    ]
+    files_before = instance.exec_in_container(checksum_command)
+    assert files_before
+
+    error = instance.query_and_get_error(
+        f"OPTIMIZE TABLE {table_name};",
+        settings={"allow_experimental_iceberg_compaction": 1},
+    )
+    assert "BAD_ARGUMENTS" in error, error
+    assert "Iceberg metadata changed since the table metadata was loaded" in error, error
+    assert instance.exec_in_container(checksum_command) == files_before
+
+
+@pytest.mark.parametrize("storage_type", ["local"])
 def test_optimize_rejects_external_schema_change(
     started_cluster_iceberg_with_spark, storage_type
 ):
