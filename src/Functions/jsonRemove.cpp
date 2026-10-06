@@ -332,76 +332,83 @@ ParsedPath parseJSONPath(const String & path, uint32_t parse_depth, uint32_t par
     return result;
 }
 
-size_t findMember(const JSONNode & object, const String & name)
-{
-    for (size_t i = 0; i < object.members.size(); ++i)
-    {
-        if (object.members[i].name == name)
-            return i;
-    }
-    return object.members.size();
-}
-
 bool removeAtPath(JSONNodes & nodes, JSONNodeIndex root, const ParsedPath & path)
 {
-    JSONNodeIndex parent_index = root;
+    VectorWithMemoryTracking<JSONNodeIndex> parent_indices;
+    VectorWithMemoryTracking<JSONNodeIndex> next_parent_indices;
+    parent_indices.push_back(root);
 
     for (size_t i = 0; i + 1 < path.size(); ++i)
     {
         const auto & step = path[i];
-        const auto & parent = nodes[parent_index];
-        if (step.type == PathStep::Type::Member)
+        next_parent_indices.clear();
+
+        for (const auto parent_index : parent_indices)
         {
-            if (parent.type != JSONNode::Type::Object)
-                return false;
+            const auto & parent = nodes[parent_index];
+            if (step.type == PathStep::Type::Member)
+            {
+                if (parent.type != JSONNode::Type::Object)
+                    continue;
 
-            const size_t member_index = findMember(parent, step.member_name);
-            if (member_index == parent.members.size())
-                return false;
-
-            parent_index = parent.members[member_index].value;
+                for (const auto & member : parent.members)
+                {
+                    if (member.name == step.member_name)
+                        next_parent_indices.push_back(member.value);
+                }
+            }
+            else if (parent.type == JSONNode::Type::Array && step.index < parent.elements.size())
+            {
+                next_parent_indices.push_back(parent.elements[step.index]);
+            }
         }
-        else
-        {
-            if (parent.type != JSONNode::Type::Array || step.index >= parent.elements.size())
-                return false;
 
-            parent_index = parent.elements[step.index];
-        }
-    }
-
-    auto & parent = nodes[parent_index];
-    const auto & target = path.back();
-    if (target.type == PathStep::Type::Member)
-    {
-        if (parent.type != JSONNode::Type::Object)
+        if (next_parent_indices.empty())
             return false;
 
-        size_t write_index = 0;
-        bool removed = false;
-        for (size_t read_index = 0; read_index < parent.members.size(); ++read_index)
-        {
-            if (parent.members[read_index].name == target.member_name)
-            {
-                removed = true;
-                continue;
-            }
-
-            if (write_index != read_index)
-                parent.members[write_index] = std::move(parent.members[read_index]);
-            ++write_index;
-        }
-
-        if (removed)
-            parent.members.resize(write_index);
-        return removed;
+        parent_indices.swap(next_parent_indices);
     }
 
-    if (parent.type != JSONNode::Type::Array || target.index >= parent.elements.size())
-        return false;
+    bool removed = false;
+    const auto & target = path.back();
 
-    parent.elements.erase(parent.elements.begin() + target.index);
-    return true;
+    for (const auto parent_index : parent_indices)
+    {
+        auto & parent = nodes[parent_index];
+        if (target.type == PathStep::Type::Member)
+        {
+            if (parent.type != JSONNode::Type::Object)
+                continue;
+
+            size_t write_index = 0;
+            bool removed_from_parent = false;
+            for (size_t read_index = 0; read_index < parent.members.size(); ++read_index)
+            {
+                if (parent.members[read_index].name == target.member_name)
+                {
+                    removed_from_parent = true;
+                    continue;
+                }
+
+                if (write_index != read_index)
+                    parent.members[write_index] = std::move(parent.members[read_index]);
+                ++write_index;
+            }
+
+            if (removed_from_parent)
+            {
+                parent.members.resize(write_index);
+                removed = true;
+            }
+        }
+        else if (parent.type == JSONNode::Type::Array && target.index < parent.elements.size())
+        {
+            parent.elements.erase(parent.elements.begin() + target.index);
+            removed = true;
+        }
+    }
+
+    return removed;
 }
 
 void appendSlice(ColumnString::Chars & output, std::string_view json, JSONSlice slice)
