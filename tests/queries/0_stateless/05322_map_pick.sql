@@ -50,7 +50,7 @@ SELECT number, mapPick(
         number = 0,
         mapFromArrays(emptyArrayString(), emptyArrayUInt64()),
         map('a', toUInt64(1), 'b', toUInt64(2))),
-    'a')
+    if(number = 0, 'missing', 'a'))
 FROM numbers(2)
 ORDER BY number
 FORMAT TabSeparatedRaw;
