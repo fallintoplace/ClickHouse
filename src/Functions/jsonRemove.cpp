@@ -32,14 +32,14 @@ namespace Setting
 {
 extern const SettingsUInt64 max_parser_backtracks;
 extern const SettingsUInt64 max_parser_depth;
-} // namespace Setting
+}
 
 namespace ErrorCodes
 {
 extern const int BAD_ARGUMENTS;
 extern const int ILLEGAL_COLUMN;
 extern const int ILLEGAL_TYPE_OF_ARGUMENT;
-} // namespace ErrorCodes
+}
 
 namespace
 {
@@ -595,7 +595,7 @@ private:
     const UInt64 max_parser_depth;
     const UInt64 max_parser_backtracks;
 };
-} // namespace
+}
 
 REGISTER_FUNCTION(JSONRemove)
 {
@@ -631,6 +631,6 @@ SELECT JSON_REMOVE('[0,1,2]', '$[0]', '$[1]');
     factory.registerAlias("JSON_REMOVE", "JSONRemove", FunctionFactory::Case::Insensitive);
 }
 
-} // namespace DB
+}
 
 #endif
