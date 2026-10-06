@@ -53,6 +53,8 @@ SELECT mode(x) = 1
 FROM VALUES('x Float32', (0.0), (0.0), (-0.0), (-0.0), (1.0), (1.0), (1.0));
 SELECT mode(x) = 1
 FROM VALUES('x Float64', (0.0), (0.0), (-0.0), (-0.0), (1.0), (1.0), (1.0));
+-- Repeated BFloat16 NaNs must coalesce under the hash table's bitwise floating-point equality.
+SELECT isNaN(mode(if(number < 3, toBFloat16('nan'), toBFloat16(1)))) FROM numbers(5);
 SELECT mode(x)[1] = 1
 FROM VALUES('x Array(Float64)', ([0.0]), ([0.0]), ([-0.0]), ([-0.0]), ([1.0]), ([1.0]), ([1.0]));
 SELECT tupleElement(mode(x), 1) = 1
