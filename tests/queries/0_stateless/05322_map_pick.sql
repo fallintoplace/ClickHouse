@@ -39,6 +39,23 @@ ORDER BY number
 FORMAT TabSeparatedRaw;
 
 SELECT number, mapPick(
+    map('a', number, 'b', number + 1),
+    'a')
+FROM numbers(2)
+ORDER BY number
+FORMAT TabSeparatedRaw;
+
+SELECT number, mapPick(
+    if(
+        number = 0,
+        mapFromArrays(emptyArrayString(), emptyArrayUInt64()),
+        map('a', toUInt64(1), 'b', toUInt64(2))),
+    'a')
+FROM numbers(2)
+ORDER BY number
+FORMAT TabSeparatedRaw;
+
+SELECT number, mapPick(
     map('a', 1, 'b', 2),
     if(number = 0, 'a', 'b'))
 FROM numbers(2)
@@ -100,6 +117,11 @@ SELECT mapPick(map([1, 2], 'first', [3], 'second'), [1, 2]) FORMAT TabSeparatedR
 SELECT mapPick(
     map([toUInt64(1)], 'one', [toUInt64(2)], 'two'),
     [toInt64(1)])
+FORMAT TabSeparatedRaw;
+
+SELECT mapPick(
+    map(tuple(nan, toUInt64(1)), 'nan', tuple(1.5, toUInt64(1)), 'one-five'),
+    tuple(nan, toInt64(1)))
 FORMAT TabSeparatedRaw;
 
 SELECT mapPick(); -- { serverError NUMBER_OF_ARGUMENTS_DOESNT_MATCH }
