@@ -220,6 +220,7 @@ static Plan getPlan(
     plan.metadata_file_path = metadata_file_path;
     plan.generator = FileNamesGenerator(
         persistent_table_components.path_resolver.getTableLocation(), false, compression_method, write_format);
+    plan.generator.setVersion(metadata_version + 1);
 
     Poco::JSON::Object::Ptr initial_metadata_object
         = getMetadataJSONObject(
@@ -354,8 +355,7 @@ static void writeDataFiles(
     const IcebergPathResolver & path_resolver,
     const std::optional<FormatSettings> & format_settings,
     ContextPtr context,
-    const String & write_format,
-    CompressionMethod write_compression_method)
+    const String & write_format)
 {
     ColumnMapperPtr column_mapper;
     {
@@ -413,7 +413,7 @@ static void writeDataFiles(
             parser_shared_resources,
             std::make_shared<FormatFilterInfo>(nullptr, context, nullptr, nullptr, nullptr),
             true /* is_remote_fs */,
-            chooseCompressionMethod(data_file->data_object_info->getPath(), toContentEncodingName(write_compression_method)),
+            chooseCompressionMethod(data_file->data_object_info->getPath(), "auto"),
             false);
 
         auto write_buffer = object_storage->writeObject(
@@ -1080,7 +1080,7 @@ void checkIfIcebergHistorySupported(const IcebergHistory & history)
 
 }
 
-static void writeMetadataFiles(
+static String writeMetadataFiles(
     Plan & plan, const IcebergPathResolver & path_resolver, ObjectStoragePtr object_storage, ContextPtr context, SharedHeader sample_block_, String write_format, String table_path)
 {
     auto log = getLogger("IcebergCompaction");
@@ -1380,14 +1380,16 @@ static void writeMetadataFiles(
 
     {
         std::string json_representation = stringifyJSON(metadata_object, 4);
+        const String committed_metadata_file_path = path_resolver.resolve(generated_metadata_info.path);
         writeMessageToFile(
             json_representation,
-            path_resolver.resolve(generated_metadata_info.path),
+            committed_metadata_file_path,
             object_storage,
             context,
-            /* write_if_none_match */ "",
+            /* write_if_none_match */ "*",
             /* write_if_match */ "",
             generated_metadata_info.compression_method);
+        return committed_metadata_file_path;
     }
 }
 
@@ -1568,8 +1570,7 @@ void compactIcebergTable(
             persistent_table_components.path_resolver,
             format_settings_,
             context_,
-            write_format,
-            plan.metadata_compression_method);
+            write_format);
 
         const auto [_post_write_metadata_version, post_write_metadata_file_path, _post_write_compression_method]
             = getLatestOrExplicitMetadataFileAndVersion(
@@ -1588,7 +1589,32 @@ void compactIcebergTable(
                 ErrorCodes::BAD_ARGUMENTS,
                 "Iceberg metadata changed while writing compacted data; refusing to publish or delete old files");
 
-        writeMetadataFiles(plan, persistent_table_components.path_resolver, object_storage_, context_, sample_block_, write_format, persistent_table_components.table_path);
+        const auto committed_metadata_file_path = writeMetadataFiles(
+            plan,
+            persistent_table_components.path_resolver,
+            object_storage_,
+            context_,
+            sample_block_,
+            write_format,
+            persistent_table_components.table_path);
+
+        const auto [_committed_metadata_version, current_metadata_file_path, _committed_compression_method]
+            = getLatestOrExplicitMetadataFileAndVersion(
+                object_storage_,
+                persistent_table_components.table_path,
+                data_lake_settings,
+                persistent_table_components.metadata_cache,
+                context_,
+                log.get(),
+                persistent_table_components.table_uuid,
+                persistent_table_components.metadata_compression_method,
+                /* force_fetch_latest_metadata */ true,
+                /* ignore_metadata_pointer_overrides */ true);
+        if (current_metadata_file_path != committed_metadata_file_path)
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "Iceberg metadata changed while publishing compacted metadata; refusing to delete old files");
+
         clearOldFiles(object_storage_, old_files);
     }
 }

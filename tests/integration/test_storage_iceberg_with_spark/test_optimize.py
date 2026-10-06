@@ -308,6 +308,49 @@ def test_optimize_rejects_latest_gc_disabled_with_compressed_metadata(
 
 
 @pytest.mark.parametrize("storage_type", ["local"])
+def test_optimize_with_compressed_metadata(
+    started_cluster_iceberg_with_spark, storage_type
+):
+    instance = started_cluster_iceberg_with_spark.instances["node1"]
+    table_name = "test_optimize_codec_" + get_uuid_str()
+    spark = create_external_optimize_table(
+        started_cluster_iceberg_with_spark,
+        instance,
+        storage_type,
+        table_name,
+        with_position_delete=True,
+    )
+
+    spark_alter_table(
+        started_cluster_iceberg_with_spark,
+        spark,
+        storage_type,
+        table_name,
+        "SET TBLPROPERTIES('write.metadata.compression-codec' = 'gzip')",
+    )
+
+    instance.query(f"DROP TABLE {table_name}")
+    create_iceberg_table(
+        storage_type, instance, table_name, started_cluster_iceberg_with_spark
+    )
+    assert int(instance.query(f"SELECT count() FROM {table_name}")) == 80
+
+    instance.query(
+        f"OPTIMIZE TABLE {table_name};",
+        settings={"allow_experimental_iceberg_compaction": 1},
+    )
+    assert int(instance.query(f"SELECT count() FROM {table_name}")) == 80
+
+    metadata_dir = (
+        f"/var/lib/clickhouse/user_files/iceberg_data/default/{table_name}/metadata"
+    )
+    compressed_metadata = instance.exec_in_container(
+        ["bash", "-c", f"ls {metadata_dir}/*.gz.metadata.json 2>/dev/null | head -1"]
+    ).strip()
+    assert compressed_metadata
+
+
+@pytest.mark.parametrize("storage_type", ["local"])
 def test_optimize_rejects_external_metadata_only_change(
     started_cluster_iceberg_with_spark, storage_type
 ):
