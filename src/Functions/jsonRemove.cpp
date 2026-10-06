@@ -146,7 +146,6 @@ public:
 
     Ch * PutBegin() { return nullptr; }
     void Put(Ch) { }
-    void Flush() { }
     size_t PutEnd(Ch *) { return 0; }
 
 private:
