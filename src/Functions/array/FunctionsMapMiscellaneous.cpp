@@ -812,6 +812,138 @@ private:
     FunctionOverloadResolverPtr is_distinct_from_resolver;
 };
 
+class FunctionMapPick final : public IFunction
+{
+public:
+    static constexpr auto name = "mapPick";
+
+    static FunctionPtr create(ContextPtr context)
+    {
+        return std::make_shared<FunctionMapPick>(context);
+    }
+
+    explicit FunctionMapPick(const ContextPtr & context)
+        : is_distinct_from_resolver(FunctionFactory::instance().get("isDistinctFrom", context))
+    {
+    }
+
+    String getName() const override { return name; }
+    bool isVariadic() const override { return true; }
+    size_t getNumberOfArguments() const override { return 0; }
+    bool useDefaultImplementationForNulls() const override { return false; }
+    bool useDefaultImplementationForNothing() const override { return false; }
+    bool useDefaultImplementationForConstants() const override { return true; }
+    bool useDefaultImplementationForLowCardinalityColumns() const override { return false; }
+    bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo &) const override { return false; }
+
+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override
+    {
+        if (arguments.size() < 2)
+            throw Exception(
+                ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH,
+                "Function {} requires at least 2 arguments, passed {}",
+                getName(),
+                arguments.size());
+
+        const auto * map_type = checkAndGetDataType<DataTypeMap>(arguments[0].get());
+        if (!map_type)
+            throw Exception(
+                ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
+                "First argument for function {} must be a Map, found {}",
+                getName(),
+                arguments[0]->getName());
+
+        const auto key_type = recursiveRemoveLowCardinality(map_type->getKeyType());
+        for (size_t i = 1; i < arguments.size(); ++i)
+        {
+            const auto pick_key_type = recursiveRemoveLowCardinality(arguments[i]);
+            is_distinct_from_resolver->getReturnType({
+                {nullptr, key_type, "key"},
+                {nullptr, pick_key_type, "pick_key"}});
+        }
+
+        return arguments[0];
+    }
+
+    ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr &, size_t) const override
+    {
+        auto map_column = arguments[0].column->convertToFullColumnIfConst();
+        const auto & map = assert_cast<const ColumnMap &>(*map_column);
+        const auto & nested_map = map.getNestedColumn();
+        const auto & offsets = nested_map.getOffsets();
+
+        if (nested_map.getData().empty())
+            return map_column;
+
+        const auto & map_type = assert_cast<const DataTypeMap &>(*arguments[0].type);
+        const auto key_column = recursiveRemoveLowCardinality(map.getNestedData().getColumnPtr(0));
+        const auto key_type = recursiveRemoveLowCardinality(map_type.getKeyType());
+
+        const size_t map_elements_count = key_column->size();
+        auto keep = ColumnUInt8::create(map_elements_count, UInt8(0));
+        auto & keep_data = keep->getData();
+
+        for (size_t argument_index = 1; argument_index < arguments.size(); ++argument_index)
+        {
+            auto pick_key_column = recursiveRemoveLowCardinality(arguments[argument_index].column);
+            auto pick_key_type = recursiveRemoveLowCardinality(arguments[argument_index].type);
+            auto replicated_pick_key = pick_key_column->replicate(offsets);
+
+            if (const auto comparison_type = tryGetLeastSupertype(DataTypes{key_type, pick_key_type}))
+            {
+                auto comparison_key_column = castColumn(
+                    ColumnWithTypeAndName{key_column, key_type, "key"}, comparison_type);
+                replicated_pick_key = castColumn(
+                    ColumnWithTypeAndName{replicated_pick_key, pick_key_type, "pick_key"}, comparison_type);
+
+                if (const auto * const_pick_key = checkAndGetColumn<ColumnConst>(replicated_pick_key.get()))
+                {
+                    PaddedPODArray<Int8> compare_results;
+                    comparison_key_column->compareColumn(
+                        const_pick_key->getDataColumn(),
+                        0,
+                        nullptr,
+                        compare_results,
+                        /* direction = */ 1,
+                        /* nan_direction_hint = */ 1);
+
+                    for (size_t i = 0; i < map_elements_count; ++i)
+                        keep_data[i] |= static_cast<UInt8>(compare_results[i] == 0);
+                }
+                else
+                {
+                    for (size_t i = 0; i < map_elements_count; ++i)
+                        keep_data[i] |= static_cast<UInt8>(
+                            comparison_key_column->compareAt(i, i, *replicated_pick_key, 1) == 0);
+                }
+            }
+            else
+            {
+                /// Preserve comparison support for types such as mixed signed/unsigned arrays, where
+                /// FunctionComparison has a dedicated path even though no least supertype exists.
+                /// This fallback uses isDistinctFrom semantics, which treat NaN values as distinct.
+                ColumnsWithTypeAndName comparison_arguments{
+                    {key_column, key_type, "key"},
+                    {replicated_pick_key, pick_key_type, "pick_key"}};
+                auto comparison = is_distinct_from_resolver->build(comparison_arguments);
+                auto distinct = comparison->execute(
+                    comparison_arguments, comparison->getResultType(), map_elements_count, /* dry_run = */ false);
+                distinct = distinct->convertToFullColumnIfConst();
+                const auto & distinct_data = assert_cast<const ColumnUInt8 &>(*distinct).getData();
+
+                for (size_t i = 0; i < map_elements_count; ++i)
+                    keep_data[i] |= static_cast<UInt8>(distinct_data[i] == 0);
+            }
+        }
+
+        auto filtered_nested_map = ArrayFilterImpl::execute(nested_map, std::move(keep));
+        return ColumnMap::create(std::move(filtered_nested_map));
+    }
+
+private:
+    FunctionOverloadResolverPtr is_distinct_from_resolver;
+};
+
 REGISTER_FUNCTION(MapMiscellaneous)
 {
     /// mapConcat documentation
@@ -996,6 +1128,31 @@ For key types with a common supertype, NaN keys follow map lookup semantics, so 
     FunctionDocumentation::Category category_mapRemove = FunctionDocumentation::Category::Map;
     FunctionDocumentation documentation_mapRemove = {description_mapRemove, syntax_mapRemove, arguments_mapRemove, {}, returned_value_mapRemove, examples_mapRemove, introduced_in_mapRemove, category_mapRemove};
     factory.registerFunction<FunctionMapRemove>(documentation_mapRemove);
+
+    FunctionDocumentation::Description description_mapPick = R"(
+Returns a map containing all entries whose key equals at least one of the specified keys.
+Missing keys are ignored, duplicate requested keys have no additional effect, and all matching duplicate entries in the input map are preserved.
+The relative order of entries from the input map is preserved.
+NULLs are compared as values: a NULL requested key does not match a non-NULL key, and NULL components in composite keys match other NULL components.
+For key types with a common supertype, NaN keys follow map lookup semantics, so a NaN requested key matches a NaN map key.
+)";
+    FunctionDocumentation::Syntax syntax_mapPick = "mapPick(map, key1 [, key2, ...])";
+    FunctionDocumentation::Arguments arguments_mapPick = {
+        {"map", "Map to select matching entries from.", {"Map(K, V)"}},
+        {"key1 [, key2, ...]", "One or more keys to keep. Each key type must be comparable with the key type of the map.", {"Any"}}
+    };
+    FunctionDocumentation::ReturnedValue returned_value_mapPick = {"Returns the map with entries whose key matches at least one specified key.", {"Map(K, V)"}};
+    FunctionDocumentation::Examples examples_mapPick = {
+        {
+            "Usage example",
+            "SELECT mapPick(map('k1', 1, 'k2', 2, 'k3', 3), 'k1', 'k3')",
+            "{'k1':1,'k3':3}"
+        }
+    };
+    FunctionDocumentation::IntroducedIn introduced_in_mapPick = {26, 10};
+    FunctionDocumentation::Category category_mapPick = FunctionDocumentation::Category::Map;
+    FunctionDocumentation documentation_mapPick = {description_mapPick, syntax_mapPick, arguments_mapPick, {}, returned_value_mapPick, examples_mapPick, introduced_in_mapPick, category_mapPick};
+    factory.registerFunction<FunctionMapPick>(documentation_mapPick);
 
     /// mapApply documentation
     FunctionDocumentation::Description description_mapApply = R"(
