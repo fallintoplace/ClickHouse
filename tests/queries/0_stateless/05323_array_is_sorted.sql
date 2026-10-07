@@ -29,3 +29,8 @@ FROM values(
 );
 
 SELECT arrayIsSorted(1); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
+
+-- Match arraySort's special-value order: regular values, NaN, then NULL.
+-- { echoOff }
+SELECT throwIf(arrayIsSorted([-inf, 0.0, inf, nan, NULL]) != 1) FORMAT Null;
+SELECT throwIf(arrayIsSorted([-inf, 0.0, inf, NULL, nan]) != 0) FORMAT Null;
