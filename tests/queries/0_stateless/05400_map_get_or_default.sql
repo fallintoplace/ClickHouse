@@ -59,6 +59,36 @@ SELECT mapGetOrDefault(
 FROM numbers(1)
 FORMAT TabSeparatedRaw;
 
+SELECT throwIf(result != if(number = 0, toInt64(0), toInt64(10)))
+FROM
+(
+    SELECT
+        number,
+        mapGetOrDefault(
+            map('a', toInt64(number)),
+            if(number = 0, 'a', 'missing'),
+            intDiv(toInt64(10), toInt64(number))) AS result
+    FROM numbers(2)
+)
+FORMAT Null;
+
+SELECT throwIf(mapGetOrDefault(map(toFixedString('a', 4), 1), 'a', 99) != 1) FORMAT Null;
+
+SELECT throwIf(
+    mapGetOrDefault(
+        CAST(map(toFixedString('a', 4), 1), 'Map(LowCardinality(FixedString(4)), UInt8)'),
+        'a',
+        99) != 1)
+SETTINGS allow_suspicious_low_cardinality_types = 1
+FORMAT Null;
+
+SELECT throwIf(
+    mapGetOrDefault(
+        map(toDate('2024-01-01'), 'date'),
+        toDateTime('2024-01-01 00:00:00'),
+        'missing') != 'date')
+FORMAT Null;
+
 SELECT mapGetOrDefault([1, 2], 1, 0); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 SELECT mapGetOrDefault(map('a', 1), 'a'); -- { serverError NUMBER_OF_ARGUMENTS_DOESNT_MATCH }
 SELECT mapGetOrDefault(map('a', 1), 'missing', [1, 2]); -- { serverError NO_COMMON_TYPE }
