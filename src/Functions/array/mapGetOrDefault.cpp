@@ -134,6 +134,9 @@ public:
         auto positions = index_function->execute(
             index_arguments, index_type, input_rows_count, /* dry_run = */ false);
 
+        /// arrayElement intentionally throws for a constant index 0, while a non-constant 0
+        /// returns the element type's default value. indexOf can return Const(0) when both
+        /// the map and key are constant and the key is absent, so materialize positions here.
         auto full_positions = positions->convertToFullColumnIfConst();
         const auto & position_data = assert_cast<const ColumnUInt64 &>(*full_positions).getData();
 
@@ -145,7 +148,7 @@ public:
         auto values_type = std::make_shared<DataTypeArray>(map_type.getValueType());
         ColumnsWithTypeAndName element_arguments{
             {std::move(values), values_type, ""},
-            {positions, index_type, ""}};
+            {full_positions, index_type, ""}};
         auto element_function = array_element->build(element_arguments);
         auto element_column = element_function->execute(
             element_arguments, element_function->getResultType(), input_rows_count, /* dry_run = */ false);

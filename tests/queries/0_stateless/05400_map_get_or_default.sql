@@ -32,6 +32,8 @@ SELECT number, mapGetOrDefault(map('a', number, 'b', number + 10), if(number = 0
 
 SELECT number, mapGetOrDefault(map('a', 10, 'b', 20), if(number = 0, 'a', 'missing'), number + 100) FROM numbers(2) ORDER BY number FORMAT TabSeparatedRaw;
 
+SELECT number, mapGetOrDefault(map('a', 10), 'missing', number + 200) FROM numbers(2) ORDER BY number FORMAT TabSeparatedRaw;
+
 SELECT mapGetOrDefault(map(toUInt64(1), 'one'), toUInt8(1), 'missing') FORMAT TabSeparatedRaw;
 
 SELECT mapGetOrDefault(map('a', 1), NULL, 42) FORMAT TabSeparatedRaw;
