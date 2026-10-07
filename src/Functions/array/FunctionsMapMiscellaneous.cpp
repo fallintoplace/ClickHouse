@@ -1134,7 +1134,7 @@ Returns a map containing all entries whose key equals at least one of the specif
 Missing keys are ignored, duplicate requested keys have no additional effect, and all matching duplicate entries in the input map are preserved.
 The relative order of entries from the input map is preserved.
 NULLs are compared as values: a NULL requested key does not match a non-NULL key, and NULL components in composite keys match other NULL components.
-For key types with a common supertype, NaN keys follow map lookup semantics, so a NaN requested key matches a NaN map key.
+For key types with a common supertype, a NaN requested key matches a NaN map key, including NaN components in composite keys.
 )";
     FunctionDocumentation::Syntax syntax_mapPick = "mapPick(map, key1 [, key2, ...])";
     FunctionDocumentation::Arguments arguments_mapPick = {

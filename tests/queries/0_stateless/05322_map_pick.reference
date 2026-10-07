@@ -21,8 +21,8 @@
 {'b':2}
 Map(LowCardinality(String), LowCardinality(String))
 {'a':'x'}
-0	1
-1	1
+1	nan	1
+1	1	nan	1
 {[1,2]:'first'}
 {[1]:'one'}
 {}

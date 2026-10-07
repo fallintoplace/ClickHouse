@@ -94,22 +94,21 @@ SELECT mapPick(
     'a')
 FORMAT TabSeparatedRaw;
 
+WITH mapPick(map(nan, 'nan', 1.5, 'one-five'), nan) AS picked
 SELECT
-    mapContainsKey(mapPick(map(nan, 'nan', 1.5, 'one-five'), nan), nan),
-    length(mapKeys(mapPick(map(nan, 'nan', 1.5, 'one-five'), nan)))
+    isNaN(mapKeys(picked)[1]),
+    mapValues(picked)[1],
+    length(mapKeys(picked))
 FORMAT TabSeparatedRaw;
 
+WITH mapPick(
+    map(tuple(nan, toUInt8(1)), 'nan', tuple(1.5, toUInt8(1)), 'one-five'),
+    tuple(nan, toUInt8(1))) AS picked
 SELECT
-    mapContainsKey(
-        mapPick(
-            map(tuple(nan, toUInt8(1)), 'nan', tuple(1.5, toUInt8(1)), 'one-five'),
-            tuple(nan, toUInt8(1))),
-        tuple(nan, toUInt8(1))),
-    length(
-        mapKeys(
-            mapPick(
-                map(tuple(nan, toUInt8(1)), 'nan', tuple(1.5, toUInt8(1)), 'one-five'),
-                tuple(nan, toUInt8(1)))))
+    isNaN(tupleElement(mapKeys(picked)[1], 1)),
+    tupleElement(mapKeys(picked)[1], 2),
+    mapValues(picked)[1],
+    length(mapKeys(picked))
 FORMAT TabSeparatedRaw;
 
 SELECT mapPick(map([1, 2], 'first', [3], 'second'), [1, 2]) FORMAT TabSeparatedRaw;
