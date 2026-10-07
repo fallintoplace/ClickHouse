@@ -58,3 +58,10 @@ SELECT JSONRemove('{"a":1} {"b":2}', '$.x') FORMAT TSV; -- { serverError BAD_ARG
 SELECT JSONRemove('[]', concat('$[', toString(number), ']')) FROM numbers(1) FORMAT TSV; -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 -- Embedded NUL bytes must not silently truncate the input.
 SELECT JSONRemove(concat('{"a":1}', char(0), '{"b":2}'), '$.x') FORMAT TSV; -- { serverError BAD_ARGUMENTS }
+
+-- A constant JSON input must keep a constant result even on an empty block.
+SELECT JSONRemove('{"a":1,"b":2}', '$.a') FROM numbers(0) FORMAT TSV;
+SELECT JSONRemove('{"a":1,"b":2}', '$.a') FROM numbers(0)
+UNION ALL
+SELECT JSONRemove('{"a":1,"b":2}', '$.a') FROM numbers(1)
+FORMAT TSV;

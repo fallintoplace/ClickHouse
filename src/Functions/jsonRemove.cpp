@@ -560,7 +560,7 @@ public:
 
         auto result = ColumnString::create();
         result->reserve(json_is_const ? 1 : input_rows_count);
-        if (!input_rows_count)
+        if (!input_rows_count && !json_is_const)
             return result;
 
         auto & result_chars = result->getChars();
