@@ -32,4 +32,8 @@ SELECT indexOfAssumeSorted([1, 3, 5, 7, 9], number) FROM numbers(11);
 SELECT indexOfAssumeSorted(CAST([-2, -1, 1, 1, 1, 3] AS Array(Int64)), number) FROM numbers(5);
 SELECT indexOfAssumeSorted(CAST([0, 0, 2, 2, 5] AS Array(UInt64)), toInt64(number) - 1) FROM numbers(7);
 
+-- Enum values are numerically sorted, but their names may not be sorted.
+WITH CAST(['z', 'a'], 'Array(Enum8(\'z\' = 1, \'a\' = 2))') AS e
+SELECT indexOfAssumeSorted(e, if(number = 0, 'z', 'a')) FROM numbers(2);
+
 DROP TABLE IF EXISTS test;
