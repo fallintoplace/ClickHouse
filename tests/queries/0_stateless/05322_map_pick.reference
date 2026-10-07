@@ -26,3 +26,4 @@ Map(LowCardinality(String), LowCardinality(String))
 {[1,2]:'first'}
 {[1]:'one'}
 {}
+{[1]:'one'}	{[2]:'two'}
