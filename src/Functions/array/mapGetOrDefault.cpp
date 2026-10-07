@@ -134,24 +134,42 @@ public:
         auto positions = index_function->execute(
             index_arguments, index_type, input_rows_count, /* dry_run = */ false);
 
-        /// arrayElement intentionally throws for a constant index 0, while a non-constant 0
-        /// returns the element type's default value. indexOf can return Const(0) when both
-        /// the map and key are constant and the key is absent, so materialize positions here.
-        auto full_positions = positions->convertToFullColumnIfConst();
-        const auto & position_data = assert_cast<const ColumnUInt64 &>(*full_positions).getData();
+        const auto * const_positions = checkAndGetColumnConst<ColumnUInt64>(positions.get());
+        const UInt64 constant_position = const_positions ? const_positions->getValue<UInt64>() : 0;
 
-        auto found = ColumnUInt8::create(input_rows_count);
-        auto & found_data = found->getData();
-        for (size_t row = 0; row < input_rows_count; ++row)
-            found_data[row] = static_cast<UInt8>(position_data[row] != 0);
+        ColumnPtr found;
+        if (const_positions)
+        {
+            found = DataTypeUInt8().createColumnConst(input_rows_count, constant_position != 0);
+        }
+        else
+        {
+            const auto & position_data = assert_cast<const ColumnUInt64 &>(*positions).getData();
+            auto found_column = ColumnUInt8::create(input_rows_count);
+            auto & found_data = found_column->getData();
+            for (size_t row = 0; row < input_rows_count; ++row)
+                found_data[row] = static_cast<UInt8>(position_data[row] != 0);
+            found = std::move(found_column);
+        }
 
         auto values_type = std::make_shared<DataTypeArray>(map_type.getValueType());
         ColumnsWithTypeAndName element_arguments{
             {std::move(values), values_type, ""},
-            {full_positions, index_type, ""}};
+            {positions, index_type, ""}};
         auto element_function = array_element->build(element_arguments);
-        auto element_column = element_function->execute(
-            element_arguments, element_function->getResultType(), input_rows_count, /* dry_run = */ false);
+
+        ColumnPtr element_column;
+        if (const_positions && constant_position == 0)
+        {
+            /// `arrayElement` rejects a constant index 0. For a missing constant key, provide
+            /// the same default element without materializing the position to a full column.
+            element_column = element_function->getResultType()->createColumnConstWithDefaultValue(input_rows_count);
+        }
+        else
+        {
+            element_column = element_function->execute(
+                element_arguments, element_function->getResultType(), input_rows_count, /* dry_run = */ false);
+        }
 
         ColumnsWithTypeAndName if_arguments{
             {std::move(found), std::make_shared<DataTypeUInt8>(), ""},
