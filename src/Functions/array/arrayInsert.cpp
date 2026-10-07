@@ -179,8 +179,8 @@ The position must be a non-null native integer. Position `0` and positions outsi
     };
     FunctionDocumentation::ReturnedValue returned_value = {"Returns `arr` with `x` inserted at `pos`.", {"Array(T)"}};
     FunctionDocumentation::Examples examples = {
-        {"Positive position", "SELECT arrayInsert([1, 2, 3], 2, 9);", "[1, 9, 2, 3]"},
-        {"Negative position", "SELECT arrayInsert([1, 2, 3], -1, 9);", "[1, 2, 3, 9]"},
+        {"Positive position", "SELECT arrayInsert([1, 2, 3], 2, 9);", "[1,9,2,3]"},
+        {"Negative position", "SELECT arrayInsert([1, 2, 3], -1, 9);", "[1,2,3,9]"},
     };
     FunctionDocumentation::IntroducedIn introduced_in = {26, 10};
     FunctionDocumentation::Category category = FunctionDocumentation::Category::Array;
