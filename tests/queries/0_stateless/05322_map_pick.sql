@@ -123,6 +123,12 @@ SELECT mapPick(
     tuple(nan, toInt64(1)))
 FORMAT TabSeparatedRaw;
 
+-- Both selection modes must handle comparable array keys without a common supertype.
+SELECT
+    mapPick(map([toUInt64(1)], 'one', [toUInt64(2)], 'two'), [toInt64(1)]),
+    mapRemove(map([toUInt64(1)], 'one', [toUInt64(2)], 'two'), [toInt64(1)])
+FORMAT TabSeparatedRaw;
+
 SELECT mapPick(); -- { serverError NUMBER_OF_ARGUMENTS_DOESNT_MATCH }
 SELECT mapPick(map('a', 1)); -- { serverError NUMBER_OF_ARGUMENTS_DOESNT_MATCH }
 SELECT mapPick([1, 2], 1); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
