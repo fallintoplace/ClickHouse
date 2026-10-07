@@ -28,4 +28,8 @@ SELECT indexOfAssumeSorted(numbers, toUInt64(if(id = 1, 3, id))) FROM test ORDER
 
 SELECT indexOfAssumeSorted([1, 3, 5, 7, 9], number) FROM numbers(11);
 
+-- ColumnConst(Array) with mixed signed/unsigned needles and first-match duplicates.
+SELECT indexOfAssumeSorted(CAST([-2, -1, 1, 1, 1, 3] AS Array(Int64)), number) FROM numbers(5);
+SELECT indexOfAssumeSorted(CAST([0, 0, 2, 2, 5] AS Array(UInt64)), toInt64(number) - 1) FROM numbers(7);
+
 DROP TABLE IF EXISTS test;
