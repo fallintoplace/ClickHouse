@@ -11,6 +11,7 @@
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeNothing.h>
 #include <DataTypes/FieldToDataType.h>
+#include <DataTypes/TypeTree.h>
 #include <DataTypes/getLeastSupertype.h>
 #include <DataTypes/Utils.h>
 #include <Interpreters/Context.h>
@@ -1804,6 +1805,39 @@ bool KeyCondition::addCondition(const String & column, const Range & range)
     return true;
 }
 
+bool KeyCondition::hasUnknownAtoms() const
+{
+    return std::ranges::any_of(rpn, [](const RPNElement & element)
+    {
+        return element.function == RPNElement::FUNCTION_UNKNOWN;
+    });
+}
+
+KeyCondition KeyCondition::createWithUnknownAtomsAssumedTrue() const
+{
+    KeyCondition result = *this;
+
+    /// The reversed RPN lists every operator before its operands, so the stack holds the polarities of the pending operands.
+    std::vector<bool> positive_stack = {true};
+    for (auto it = result.rpn.rbegin(); it != result.rpn.rend(); ++it)
+    {
+        RPNElement & element = *it;
+        chassert(!positive_stack.empty());
+        bool positive = positive_stack.back();
+        positive_stack.pop_back();
+
+        if (element.function == RPNElement::FUNCTION_NOT)
+            positive_stack.push_back(!positive);
+        else if (element.function == RPNElement::FUNCTION_AND || element.function == RPNElement::FUNCTION_OR)
+            positive_stack.insert(positive_stack.end(), {positive, positive});
+        else if (element.function == RPNElement::FUNCTION_UNKNOWN)
+            element = RPNElement(positive ? RPNElement::ALWAYS_TRUE : RPNElement::ALWAYS_FALSE);
+    }
+
+    chassert(positive_stack.empty());
+    return result;
+}
+
 bool KeyCondition::hasOnlyConjunctions() const
 {
     return std::ranges::none_of(rpn, [](RPNElement element) { return element.function == RPNElement::FUNCTION_OR; });
@@ -2806,16 +2840,7 @@ bool typeContainsFloat(const DataTypePtr & type)
     if (!type)
         return false;
 
-    if (isFloat(removeLowCardinalityAndNullable(type)))
-        return true;
-
-    bool has_float = false;
-    type->forEachChild([&](const IDataType & child)
-    {
-        if (!has_float && WhichDataType(child).isFloat())
-            has_float = true;
-    });
-    return has_float;
+    return anyInTypeTree(*type, [](const IDataType & subtype) { return isFloat(subtype); });
 }
 
 }
@@ -3706,16 +3731,7 @@ bool KeyCondition::tryPrepareSetIndexForHas(
     /// the predicate.
     auto contains_float = [](const DataTypePtr & type)
     {
-        bool found = WhichDataType(*type).isFloat();
-        if (!found)
-        {
-            type->forEachChild([&found](const IDataType & child)
-            {
-                if (!found && WhichDataType(child).isFloat())
-                    found = true;
-            });
-        }
-        return found;
+        return anyInTypeTree(*type, [](const IDataType & node) { return WhichDataType(node).isFloat(); });
     };
 
     /// `Variant` and `Dynamic` elements are judged by the alternatives the constant column actually
@@ -6848,9 +6864,12 @@ BoolMask KeyCondition::checkInHyperrectangle(
         return SpaceFillingCurveType::Unknown;
     };
 
-    size_t element_idx = 0;
-    for (const auto & element : rpn)
+    /// The reported position is the element's index in `rpn`: the disjunction bitset is read positionally
+    /// against the template RPN. A position that is never reported keeps the bitset's all-true default.
+    for (size_t element_idx = 0; element_idx < rpn.size(); ++element_idx)
     {
+        const auto & element = rpn[element_idx];
+
         if (element.argument_num_of_space_filling_curve.has_value())
         {
             /// If a condition on argument of a space filling curve wasn't collapsed into FUNCTION_ARGS_IN_HYPERRECTANGLE,
@@ -7269,10 +7288,7 @@ BoolMask KeyCondition::checkInHyperrectangle(
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Unexpected function type in KeyCondition::RPNElement");
 
         if (update_partial_disjunction_result_fn)
-        {
             update_partial_disjunction_result_fn(element_idx, rpn_stack.back().can_be_true, (element.function == RPNElement::FUNCTION_UNKNOWN));
-            ++element_idx;
-        }
     }
 
     if (rpn_stack.size() != 1)
