@@ -50,6 +50,8 @@ public:
 
     bool useDefaultImplementationForNulls() const override { return false; }
 
+    bool useDefaultImplementationForLowCardinalityColumns() const override { return false; }
+
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo &) const override { return true; }
 
     DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override

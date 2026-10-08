@@ -45,6 +45,8 @@ SELECT arrayInsert([1, 2, 3], toUInt64(4), 0);
 
 SET allow_suspicious_low_cardinality_types = 1;
 
+SELECT toTypeName(arrayInsert(['a', 'b']::Array(LowCardinality(String)), 2, toLowCardinality('x')));
+
 SELECT inserted[2], length(inserted)
 FROM
 (
@@ -55,7 +57,8 @@ FROM
     FROM numbers(1)
 );
 
-SELECT count(), sum(length(inserted)), countIf(inserted[1] = 'array'), countIf(inserted[2] = toString(number))
+SELECT count(), sum(length(inserted)), countIf(inserted[1] = 'array'), countIf(inserted[2] = toString(number)),
+    any(toTypeName(inserted))
 FROM
 (
     SELECT
