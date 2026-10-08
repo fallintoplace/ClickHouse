@@ -36,4 +36,11 @@ SELECT indexOfAssumeSorted(CAST([0, 0, 2, 2, 5] AS Array(UInt64)), toInt64(numbe
 WITH CAST(['z', 'a'], 'Array(Enum8(\'z\' = 1, \'a\' = 2))') AS e
 SELECT indexOfAssumeSorted(e, if(number = 0, 'z', 'a')) FROM numbers(2);
 
+-- String arrays use lexicographic ordering, while an Enum needle compares its numeric Field.
+SELECT
+    indexOfAssumeSorted(
+        CAST(['10', '2'] AS Array(String)),
+        CAST(if(number = 0, '2', '10') AS Enum8('2' = 2, '10' = 10)))
+FROM numbers(2);
+
 DROP TABLE IF EXISTS test;

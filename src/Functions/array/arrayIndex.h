@@ -1493,6 +1493,12 @@ private:
             isColumnNullableOrLowCardinalityNullable(
                 assert_cast<const ColumnArray &>(col_array->getDataColumn()).getData());
 
+        /// Enum fields compare numerically, but String and FixedString arrays are sorted lexicographically.
+        const auto & array_type = assert_cast<const DataTypeArray &>(*arguments[0].type);
+        [[maybe_unused]] const bool string_array_with_enum_needle =
+            isStringOrFixedString(removeNullable(array_type.getNestedType()))
+            && isEnum(removeNullable(arguments[1].type));
+
         for (size_t row = 0; row < size; ++row)
         {
             const auto & value = (*item_arg)[row];
@@ -1501,7 +1507,7 @@ private:
 
             if constexpr (std::is_same_v<ConcreteAction, IndexOfAssumeSorted>)
             {
-                if (!enum_type && !array_is_nullable && (!null_map || !(*null_map)[row]))
+                if (!enum_type && !array_is_nullable && !string_array_with_enum_needle && (!null_map || !(*null_map)[row]))
                 {
                     data[row] = Impl::Main<ConcreteAction, false>::lowerBound(arr, value, arr.size(), 0);
                     continue;
