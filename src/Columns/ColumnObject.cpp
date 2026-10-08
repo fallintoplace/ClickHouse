@@ -939,8 +939,26 @@ void ColumnObject::doInsertManyFrom(const IColumn & src, size_t position, size_t
 
     for (const auto & [path, column] : src_object.typed_paths)
         typed_paths.find(path)->second->insertManyFrom(*column, position, length);
-    for (const auto & [path, column] : src_object.dynamic_paths)
-        dynamic_paths_ptrs.find(path)->second->insertManyFrom(*column, position, length);
+
+    /// Reserving every small append would lose geometric growth. Only reserve scalar
+    /// payloads when the batch at least doubles the number of rows in the object.
+    const bool reserve_dynamic_values = length >= size();
+    for (const auto & [path, column] : src_object.dynamic_paths_ptrs)
+    {
+        auto * destination = dynamic_paths_ptrs.find(path)->second;
+        if (reserve_dynamic_values)
+        {
+            auto discriminator = column->getVariantColumn().globalDiscriminatorAt(position);
+            /// A shared value may be promoted to another variant during insertion.
+            if (discriminator != ColumnVariant::NULL_DISCRIMINATOR && discriminator != column->getSharedVariantDiscriminator())
+            {
+                auto & variant = destination->getVariantColumn().getVariantByGlobalDiscriminator(discriminator);
+                if (variant.isFixedAndContiguous() || typeid_cast<const ColumnString *>(&variant))
+                    variant.reserve(variant.size() + length);
+            }
+        }
+        destination->insertManyFrom(*column, position, length);
+    }
     shared_data->insertManyFrom(*src_object.shared_data, position, length);
 }
 

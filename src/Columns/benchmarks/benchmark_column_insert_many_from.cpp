@@ -247,6 +247,7 @@ static void BM_insertRepeatedObject(benchmark::State & state)
     }
 
     state.SetItemsProcessed(state.iterations() * length);
+    state.counters["allocated_bytes"] = static_cast<double>(destination->allocatedBytes());
 }
 
 static const String type_object = "JSON";
@@ -263,6 +264,7 @@ static const String type_object_typed = "JSON(p0 UInt64, p1 String)";
         ->Args({256, 4, 1, 0}) \
         ->Args({16, 16, 1, 0}) \
         ->Args({16, 256, 1, 0}) \
+        ->Args({16, DEFAULT_BLOCK_SIZE, 1, 0}) \
         ->Args({16, ROWS, 1, 0}) \
         ->Args({16, 2, 0, 0}) \
         ->Args({16, 256, 0, 0}) \

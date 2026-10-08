@@ -462,6 +462,39 @@ TEST(ColumnObject, InsertManyFromFreshDestination)
     }
 }
 
+TEST(ColumnObject, InsertManyFromReservesScalarDynamicValues)
+{
+    auto type = DataTypeFactory::instance().get("JSON");
+    auto source = type->createColumn();
+    source->insert(Object{{"n", Field(42u)}, {"s", Field("repeated")}});
+    constexpr size_t length = 65536;
+
+    for (bool matching_layout : {false, true})
+    {
+        SCOPED_TRACE(matching_layout);
+        auto bulk = matching_layout ? source->cloneEmpty() : type->createColumn();
+        auto scalar = matching_layout ? source->cloneEmpty() : type->createColumn();
+        bulk->reserve(length);
+        scalar->reserve(length);
+
+        bulk->insertManyFrom(*source, 0, length);
+        for (size_t i = 0; i < length; ++i)
+            scalar->insertFrom(*source, 0);
+
+        assertObjectColumnsEqual(assert_cast<const ColumnObject &>(*bulk), assert_cast<const ColumnObject &>(*scalar));
+        ASSERT_LT(bulk->allocatedBytes(), scalar->allocatedBytes());
+
+        /// Small appends still grow the payloads as needed after the exact reservation.
+        for (size_t i = 0; i < 16; ++i)
+        {
+            bulk->insertManyFrom(*source, 0, 2);
+            scalar->insertFrom(*source, 0);
+            scalar->insertFrom(*source, 0);
+        }
+        assertObjectColumnsEqual(assert_cast<const ColumnObject &>(*bulk), assert_cast<const ColumnObject &>(*scalar));
+    }
+}
+
 TEST(ColumnObject, InsertManyFromSharedData)
 {
     auto type = DataTypeFactory::instance().get("JSON(max_dynamic_paths=0)");
