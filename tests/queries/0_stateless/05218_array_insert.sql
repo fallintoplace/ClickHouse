@@ -67,7 +67,28 @@ FROM
     FROM numbers(300)
 );
 
+-- LowCardinality position arguments must act like their native integer types.
+SELECT arrayInsert([1, 2, 3], toLowCardinality(toUInt8(2)), 9);
+SELECT arrayInsert([1, 2, 3], toLowCardinality(pos), 9)
+FROM values('pos UInt8', 1, 4);
+SELECT arrayInsert([1, 2, 3], toLowCardinality(pos), 9)
+FROM values('pos Int64', -4, -1);
+
+-- The result dictionary must support values from both sides, even across index width changes.
+SELECT count(), sum(length(inserted)), countIf(inserted[2] = toString(number + 250)), any(toTypeName(inserted))
+FROM
+(
+    SELECT
+        number,
+        arrayInsert(
+            arrayMap(i -> toString(i), range(250))::Array(LowCardinality(String)),
+            2,
+            toLowCardinality(toString(number + 250))) AS inserted
+    FROM numbers(300)
+);
+
 SELECT arrayInsert([1, 2, 3], 0, 9); -- { serverError ARGUMENT_OUT_OF_BOUND }
+SELECT arrayInsert([1, 2, 3], toLowCardinality(toUInt8(0)), 9); -- { serverError ARGUMENT_OUT_OF_BOUND }
 SELECT arrayInsert([1, 2, 3], 5, 9); -- { serverError ARGUMENT_OUT_OF_BOUND }
 SELECT arrayInsert([1, 2, 3], -5, 9); -- { serverError ARGUMENT_OUT_OF_BOUND }
 SELECT arrayInsert([1, 2, 3], toUInt64(18446744073709551615), 9); -- { serverError ARGUMENT_OUT_OF_BOUND }

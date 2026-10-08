@@ -85,6 +85,16 @@ void insertDynamicPosition(
     const IColumn & position_column,
     bool position_is_unsigned);
 
+/// Use column insertion for arrays containing LowCardinality values whose dictionary index types can widen.
+ColumnArray::MutablePtr insertWithLowCardinality(
+    const ColumnArray & array_column,
+    const IColumn & value_column,
+    const IColumn & position_column,
+    bool array_is_const,
+    bool value_is_const,
+    bool position_is_unsigned,
+    size_t rows);
+
 void resizeDynamicSize(IArraySource & array_source, IValueSource & value_source, IArraySink & sink, const IColumn & size_column);
 void resizeConstantSize(IArraySource & array_source, IValueSource & value_source, IArraySink & sink, ssize_t size);
 

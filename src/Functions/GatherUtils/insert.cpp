@@ -98,4 +98,39 @@ void insertDynamicPosition(
     ArrayInsert::select(sink, array_source, value_source, position_column, position_is_unsigned);
 }
 
+ColumnArray::MutablePtr insertWithLowCardinality(
+    const ColumnArray & array_column,
+    const IColumn & value_column,
+    const IColumn & position_column,
+    bool array_is_const,
+    bool value_is_const,
+    bool position_is_unsigned,
+    size_t rows)
+{
+    auto result = ColumnArray::create(array_column.getData().cloneEmpty());
+    auto & result_elements = result->getData();
+    auto & result_offsets = result->getOffsets();
+    result_offsets.reserve(rows);
+
+    const auto & elements = array_column.getData();
+    const auto & offsets = array_column.getOffsets();
+
+    for (size_t row = 0; row < rows; ++row)
+    {
+        const size_t array_row = array_is_const ? 0 : row;
+        const size_t start = array_row ? offsets[array_row - 1] : 0;
+        const size_t array_size = array_column.getSize(array_row);
+        const size_t insert_position = position_is_unsigned
+            ? normalizeInsertPosition(position_column.getUInt(row), array_size)
+            : normalizeInsertPosition(position_column.getInt(row), array_size);
+
+        result_elements.insertRangeFrom(elements, start, insert_position);
+        result_elements.insertFrom(value_column, value_is_const ? 0 : row);
+        result_elements.insertRangeFrom(elements, start + insert_position, array_size - insert_position);
+        result_offsets.push_back(result_elements.size());
+    }
+
+    return result;
+}
+
 }

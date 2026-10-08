@@ -1,6 +1,7 @@
 #include <Columns/ColumnArray.h>
 #include <Columns/ColumnConst.h>
 #include <DataTypes/DataTypeArray.h>
+#include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <DataTypes/getLeastSupertype.h>
 #include <Functions/FunctionFactory.h>
@@ -18,19 +19,6 @@ namespace ErrorCodes
 {
 extern const int ILLEGAL_TYPE_OF_ARGUMENT;
 extern const int LOGICAL_ERROR;
-}
-
-namespace
-{
-ColumnPtr convertToStructure(const ColumnPtr & column, const IColumn & structure)
-{
-    if (column->structureEquals(structure))
-        return column;
-
-    auto result = structure.cloneEmpty();
-    result->insertRangeFrom(*column, 0, column->size());
-    return result;
-}
 }
 
 class FunctionArrayInsert final : public IFunction
@@ -67,7 +55,7 @@ public:
                 getName(),
                 arguments[0]->getName());
 
-        if (!isNativeInteger(arguments[1]))
+        if (!isNativeInteger(removeLowCardinality(arguments[1])))
             throw Exception(
                 ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
                 "Second argument for function {} must be a non-null native integer but it has type {}.",
@@ -95,10 +83,7 @@ public:
         if (!arguments[2].type->equals(*return_nested_type))
             inserted_column = castColumn(arguments[2], return_nested_type);
 
-        std::unique_ptr<GatherUtils::IArraySource> array_source;
-        std::unique_ptr<GatherUtils::IValueSource> value_source;
-
-        size_t size = array_column->size();
+        const size_t size = array_column->size();
         bool is_const = false;
 
         if (const auto * const_array_column = typeid_cast<const ColumnConst *>(array_column.get()))
@@ -118,26 +103,22 @@ public:
             inserted_column = const_inserted_column->getDataColumnPtr();
         }
 
-        /// GatherUtils requires the source, value, and sink nested columns to have identical structures.
-        /// LowCardinality dictionary index widths can differ even when the logical data types are equal.
-        inserted_column = convertToStructure(inserted_column, argument_column_array->getData());
-        if (!inserted_column->structureEquals(argument_column_array->getData()))
-        {
-            /// Copying inserted values can widen the LowCardinality indexes. Normalize the array source
-            /// to that wider structure too, so the source and sink still match the value source.
-            auto normalized_array_data = convertToStructure(argument_column_array->getDataPtr(), *inserted_column);
-            array_column = ColumnArray::create(normalized_array_data, argument_column_array->getOffsetsPtr());
-            argument_column_array = typeid_cast<const ColumnArray *>(array_column.get());
-        }
+        const bool position_is_unsigned = WhichDataType(removeLowCardinality(arguments[1].type)).isNativeUInt();
 
-        array_source = GatherUtils::createArraySource(*argument_column_array, is_const, size);
-        value_source = GatherUtils::createValueSource(*inserted_column, is_inserted_const, size);
+        /// LowCardinality index widths may change while inserting new dictionary values.
+        /// Insert these arrays directly to avoid GatherUtils' strict column structure checks.
+        if (recursiveRemoveLowCardinality(return_nested_type).get() != return_nested_type.get())
+            return GatherUtils::insertWithLowCardinality(
+                *argument_column_array, *inserted_column, *position_column,
+                is_const, is_inserted_const, position_is_unsigned, size);
+
+        auto array_source = GatherUtils::createArraySource(*argument_column_array, is_const, size);
+        auto value_source = GatherUtils::createValueSource(*inserted_column, is_inserted_const, size);
 
         auto result_column = ColumnArray::create(inserted_column->cloneEmpty());
         auto & result_array = typeid_cast<ColumnArray &>(*result_column);
         auto sink = GatherUtils::createArraySink(result_array, size);
 
-        const bool position_is_unsigned = WhichDataType(arguments[1].type).isNativeUInt();
         if (isColumnConst(*position_column))
         {
             if (position_is_unsigned)
