@@ -772,8 +772,8 @@ public:
         }
 
         ColumnsWithTypeAndName if_arguments{
-            {std::move(found), std::make_shared<DataTypeUInt8>(), ""},
-            {std::move(element_column), element_function->getResultType(), ""},
+            {found, std::make_shared<DataTypeUInt8>(), ""},
+            {element_column, element_function->getResultType(), ""},
             arguments[2]};
 
         auto if_function = function_if->build(if_arguments);
