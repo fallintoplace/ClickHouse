@@ -733,6 +733,50 @@ public:
         auto index_type = index_of.getReturnTypeImpl(index_arguments);
         auto positions = index_of.executeImpl(index_arguments, index_type, input_rows_count);
 
+        /// indexOf's numeric fast path cannot match NaN keys. Map key comparisons do match NaN
+        /// with NaN, so correct only these rows and preserve the fast path for other lookups.
+        const auto & key_type = assert_cast<const DataTypeArray &>(*index_arguments[0].type).getNestedType();
+        if (isFloat(removeLowCardinality(key_type))
+            && isFloat(removeNullable(removeLowCardinality(index_arguments[1].type))))
+        {
+            ColumnPtr needle_column = recursiveRemoveLowCardinality(index_arguments[1].column);
+            ColumnPtr keys_array_holder;
+            const ColumnArray * keys_array = nullptr;
+            MutableColumnPtr updated_positions;
+
+            for (size_t row = 0; row < input_rows_count; ++row)
+            {
+                if (needle_column->isNullAt(row) || !isNaN(needle_column->getFloat64(row)))
+                    continue;
+
+                if (!updated_positions)
+                {
+                    keys_array_holder = recursiveRemoveLowCardinality(index_arguments[0].column)->convertToFullColumnIfConst();
+                    keys_array = &assert_cast<const ColumnArray &>(*keys_array_holder);
+                    updated_positions = IColumn::mutate(positions->convertToFullColumnIfConst());
+                }
+
+                auto & position_data = assert_cast<ColumnUInt64 &>(*updated_positions).getData();
+                if (position_data[row] != 0)
+                    continue;
+
+                const auto & offsets = keys_array->getOffsets();
+                const auto & keys = keys_array->getData();
+                const size_t begin = offsets[ssize_t(row) - 1];
+                for (size_t key_index = begin; key_index < offsets[row]; ++key_index)
+                {
+                    if (isNaN(keys.getFloat64(key_index)))
+                    {
+                        position_data[row] = key_index - begin + 1;
+                        break;
+                    }
+                }
+            }
+
+            if (updated_positions)
+                positions = std::move(updated_positions);
+        }
+
         /// indexOf returns a 1-based position and uses zero for a missing key.
         const auto * const_positions = checkAndGetColumnConst<ColumnUInt64>(positions.get());
         const UInt64 constant_position = const_positions ? const_positions->getValue<UInt64>() : 0;
