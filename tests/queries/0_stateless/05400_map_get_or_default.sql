@@ -93,4 +93,4 @@ FORMAT Null;
 
 SELECT mapGetOrDefault([1, 2], 1, 0); -- { serverError ILLEGAL_TYPE_OF_ARGUMENT }
 SELECT mapGetOrDefault(map('a', 1), 'a'); -- { serverError NUMBER_OF_ARGUMENTS_DOESNT_MATCH }
-SELECT mapGetOrDefault(map('a', 1), 'missing', [1, 2]); -- { serverError NO_COMMON_TYPE }
+SELECT mapGetOrDefault(map('a', 1), 'missing', [1, 2]) SETTINGS use_variant_as_common_type = 0; -- { serverError NO_COMMON_TYPE }
