@@ -3725,7 +3725,7 @@ SELECT ... LIMIT n OFFSET offset_value BY expressions ...
 
 ```sql
 -- SQL Standard style:
-[OFFSET offset_row_count {ROW | ROWS}] [FETCH {FIRST | NEXT} fetch_row_count {ROW | ROWS} {ONLY | WITH TIES}]
+[OFFSET offset_row_count {ROW | ROWS}] [FETCH {FIRST | NEXT} [fetch_row_count] {ROW | ROWS} {ONLY | WITH TIES}]
 
 -- MySQL/PostgreSQL style:
 [LIMIT [n, ]m] [OFFSET offset_row_count]
@@ -3818,7 +3818,7 @@ SELECT * FROM test_fetch ORDER BY a OFFSET 3 ROW FETCH FIRST 3 ROWS WITH TIES;
 ```
 )DOCS_MD",
         .syntax = R"(
-SELECT ... [OFFSET offset_row_count {ROW | ROWS}] [FETCH {FIRST | NEXT} fetch_row_count {ROW | ROWS} {ONLY | WITH TIES}]
+SELECT ... [OFFSET offset_row_count {ROW | ROWS}] [FETCH {FIRST | NEXT} [fetch_row_count] {ROW | ROWS} {ONLY | WITH TIES}]
 SELECT ... [LIMIT [n, ]m] [OFFSET offset_row_count]
 )",
         .parent = "SELECT",
