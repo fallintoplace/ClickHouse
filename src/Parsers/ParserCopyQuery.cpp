@@ -356,7 +356,7 @@ bool ParserCopyQuery::parseOptions(Pos & pos, boost::intrusive_ptr<ASTCopyQuery>
 
     const bool has_with = s_with.ignore(pos, expected);
     if (isEndOfStatement(pos))
-        return true;
+        return !has_with;
 
     DataShapeOptions data_shape_options;
 

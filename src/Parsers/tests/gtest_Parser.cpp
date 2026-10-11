@@ -128,6 +128,22 @@ TEST(ParserCopyQuery, FormattingPreservesTableCopy)
     }
 }
 
+TEST(ParserCopyQuery, RejectsWithWithoutOptions)
+{
+    const std::vector<String> queries = {
+        "COPY t TO STDOUT WITH",
+        "COPY t TO STDOUT WITH;",
+        "COPY t FROM STDIN WITH",
+        "COPY t FROM STDIN WITH;",
+    };
+
+    for (const auto & query : queries)
+    {
+        ParserQuery parser(query.data() + query.size());
+        EXPECT_THROW(parseQuery(parser, query, "", 0, 0, 0), DB::Exception) << "query: " << query;
+    }
+}
+
 TEST(ParserCopyQuery, RejectsInvalidOrUnsupportedOptionsWithoutWith)
 {
     const std::vector<String> queries = {
