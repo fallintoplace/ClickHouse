@@ -364,13 +364,14 @@ bool ParserCopyQuery::parseOptions(Pos & pos, boost::intrusive_ptr<ASTCopyQuery>
     /// (FORMAT csv, HEADER true, ...).
     if (open_bracket.ignore(pos, expected))
     {
-        bool is_first_option = true;
+        /// Require at least one option: an empty list must not trigger a default-format COPY.
+        if (!parseOption(pos, expected, node, data_shape_options))
+            return false;
+
         while (!close_bracket.ignore(pos, expected))
         {
-            if (!is_first_option && !comma.ignore(pos, expected))
+            if (!comma.ignore(pos, expected))
                 return false;
-            is_first_option = false;
-
             if (!parseOption(pos, expected, node, data_shape_options))
                 return false;
         }
